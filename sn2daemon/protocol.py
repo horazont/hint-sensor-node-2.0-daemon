@@ -4,6 +4,8 @@ import struct
 
 from enum import Enum
 
+from . import sensor_stream
+
 from _sn2d_comm import lib
 
 
@@ -234,36 +236,37 @@ class BME280Message:
 
 class SensorStreamMessage:
     seq = None
-    average = None
-    packed_data = None
+    data = None
 
     _header = struct.Struct(
         "<"
-        "HH"
+        "Hh"
     )
 
     @classmethod
     def from_buf(cls, type_, buf):
         result = cls()
         result.type_ = type_
-        buf, (result.seq, result.average) = unpack_and_splice(
+        buf, (result.seq, reference) = unpack_and_splice(
             buf,
             cls._header,
         )
-        result.packed_data = buf
+        result.data = sensor_stream.decompress(
+            reference,
+            buf
+        )
         return result
 
     def __repr__(self):
         return (
             "<{}.{} "
-            "type={} seq={} average={} packed_data={} "
+            "type={} seq={} data={} "
             "at 0x{:x}>".format(
                 __name__,
                 type(self).__qualname__,
                 self.type_,
                 self.seq,
-                self.average,
-                self.packed_data,
+                self.data,
                 id(self),
             )
         )

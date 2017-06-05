@@ -302,9 +302,19 @@ class TestSensorStreamMessage(unittest.TestCase):
         struct.payload.sensor_stream.average = 0xffee
         buf[base_size:] = os.urandom(32)
 
-        result = protocol.SensorStreamMessage.from_buf(
-            unittest.mock.sentinel.type_,
-            buf[1:],
+        with contextlib.ExitStack() as stack:
+            decompress = stack.enter_context(
+                unittest.mock.patch("sn2daemon.sensor_stream.decompress")
+            )
+
+            result = protocol.SensorStreamMessage.from_buf(
+                unittest.mock.sentinel.type_,
+                buf[1:],
+            )
+
+        decompress.assert_called_once_with(
+            -18,
+            buf[base_size:]
         )
 
         self.assertEqual(
@@ -323,13 +333,8 @@ class TestSensorStreamMessage(unittest.TestCase):
         )
 
         self.assertEqual(
-            result.average,
-            0xffee
-        )
-
-        self.assertEqual(
-            result.packed_data,
-            buf[base_size:]
+            result.data,
+            decompress(),
         )
 
 
