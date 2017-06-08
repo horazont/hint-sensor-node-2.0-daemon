@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+
 class Timeline:
     def __init__(self, wraparound_at, slack):
         super().__init__()
@@ -29,7 +32,6 @@ class Timeline:
         """
 
         change = self.wraparound_aware_minus(timestamp, self.__remote_tip)
-        print(change)
         if -self.__slack < change <= 0:
             # in slack region, assume late packet
             return self.__local_tip + change
@@ -37,3 +39,30 @@ class Timeline:
         self.__remote_tip = timestamp
         self.__local_tip += change
         return self.__local_tip
+
+    def forward(self, offset):
+        """
+        Advance the timeline by `offset` steps.
+
+        Forwarding happens as if :meth:`feed_and_transform` had been called
+        `offset` times, starting with the next timestamp in the timeline,
+        incrementing the `timestamp` argument by one each time with proper
+        wraparound.
+        """
+        self.__local_tip += offset
+        self.__remote_tip = (self.__remote_tip + offset) % self.__wraparound_at
+
+
+class RTCifier:
+    def __init__(self, timeline):
+        super().__init__()
+        self.__timeline = timeline
+
+    def align(self, rtc, timestamp):
+        self.__timeline.reset(timestamp)
+        self.__rtcbase = rtc
+
+    def map_to_rtc(self, timestamp):
+        return self.__rtcbase + timedelta(
+            milliseconds=self.__timeline.feed_and_transform(timestamp)
+        )

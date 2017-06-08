@@ -1,10 +1,16 @@
 import asyncio
+import binascii
+import collections
 import logging
 import struct
 
+from datetime import datetime, timedelta
 from enum import Enum
 
-from . import sensor_stream
+import aioxmpp.callbacks
+
+from . import sensor_stream, bme280, sample
+from .struct_utils import unpack_and_splice, unpack_all
 
 from _sn2d_comm import lib
 
@@ -37,28 +43,64 @@ msgtype_to_ctype = {
 }
 
 
-def unpack_and_splice(buf, struct_obj):
-    result = buf[struct_obj.size:]
-    return result, struct_obj.unpack(buf[:struct_obj.size])
-
-
-def unpack_all(buf, struct_obj):
-    size = struct_obj.size
-    if len(buf) % size != 0:
-        raise ValueError(
-            "buffer does not contain an integer number of structs"
-        )
-    return (
-        struct_obj.unpack(buf[i*size:(i+1)*size])
-        for i in range(len(buf)//size)
-    )
-
-
 class StatusMessage:
     rtc = None
     uptime = None
     v1_accel_stream_state = None
     v1_compass_stream_state = None
+    v2_i2c_metrics = None
+
+    class I2CMetrics:
+        transaction_overruns = None
+
+        _v2 = struct.Struct(
+            "<"
+            "H"
+        )
+
+        @classmethod
+        def unpack_and_splice(cls, version, buf):
+            result = cls()
+            buf, (result.transaction_overruns,) = unpack_and_splice(
+                buf,
+                cls._v2
+            )
+            return buf, result
+
+    class BME280Metrics:
+        timeouts = None
+
+        _v2 = struct.Struct(
+            "<"
+            "H"
+        )
+
+        @classmethod
+        def unpack_and_splice(cls, version, buf):
+            result = cls()
+            buf, (result.timeouts,) = unpack_and_splice(
+                buf,
+                cls._v2
+            )
+            return buf, result
+
+    class IMUStreamState(collections.namedtuple(
+            "_IMUStreamState",
+            ["sequence_number", "timestamp", "period"])):
+
+        _v1 = struct.Struct(
+            "<"
+            "HHH"
+        )
+
+        @classmethod
+        def unpack_and_splice(cls, version, buf):
+            buf, (seq, ts, period) = unpack_and_splice(
+                buf,
+                cls._v1
+            )
+            period = timedelta(milliseconds=period)
+            return buf, cls(seq, ts, period)
 
     _base_header = struct.Struct(
         "<"
@@ -82,20 +124,34 @@ class StatusMessage:
                   cls._base_header,
               )
 
-        if protocol_version != 1 or status_version != 1:
+        if protocol_version != 1:
             raise ValueError("unsupported protocol")
 
-        result.rtc = rtc
+        if status_version > 2:
+            raise ValueError("unsupported status version")
+
+        result.rtc = datetime.utcfromtimestamp(rtc)
         result.uptime = uptime
-        if status_version == 1:
-            buf, result.v1_accel_stream_state = unpack_and_splice(
-                buf,
-                cls._v1_stream_state,
-            )
-            buf, result.v1_compass_stream_state = unpack_and_splice(
-                buf,
-                cls._v1_stream_state,
-            )
+        if 1 <= status_version <= 2:
+            buf, result.v1_accel_stream_state = \
+                cls.IMUStreamState.unpack_and_splice(status_version, buf)
+            buf, result.v1_compass_stream_state = \
+                cls.IMUStreamState.unpack_and_splice(status_version, buf)
+
+        if 2 <= status_version <= 2:
+            result.v2_i2c_metrics = []
+            for i2c_bus_no in range(2):
+                buf, metrics = cls.I2CMetrics.unpack_and_splice(
+                    status_version,
+                    buf,
+                )
+                result.v2_i2c_metrics.append(metrics)
+
+            buf, result.v2_bme280_metrics = \
+                cls.BME280Metrics.unpack_and_splice(
+                    status_version,
+                    buf,
+                )
 
         return result
 
@@ -123,21 +179,27 @@ class DS18B20Message:
         "8sh"
     )
 
+    def __init__(self, timestamp, samples, type_=MsgType.SENSOR_DS18B20):
+        super().__init__()
+        self.type_ = type_
+        self.timestamp = timestamp
+        self.samples = list(samples)
+
     @classmethod
     def from_buf(cls, type_, buf):
-        result = cls()
-        result.type_ = type_
-        buf, (result.timestamp,) = unpack_and_splice(
+        buf, (timestamp,) = unpack_and_splice(
             buf,
             cls._header,
         )
 
-        result.samples = [
-            (id_, value/16)
-            for id_, value in unpack_all(buf, cls._sample)
-        ]
-
-        return result
+        return cls(
+            timestamp,
+            (
+                (id_, value/16)
+                for id_, value in unpack_all(buf, cls._sample)
+            ),
+            type_=type_,
+        )
 
     def __repr__(self):
         return "<{}.{} timestamp={} samples={} at 0x{:x}>".format(
@@ -148,6 +210,17 @@ class DS18B20Message:
             id(self),
         )
 
+    def get_samples(self):
+        for id_, value in self.samples:
+            yield sample.Sample(
+                self.timestamp,
+                sample.SensorPath(
+                    sample.Part.DS18B20,
+                    binascii.b2a_hex(id_).decode(),
+                ),
+                value,
+            )
+
 
 class NoiseMessage:
     samples = None
@@ -157,14 +230,22 @@ class NoiseMessage:
         "HH"
     )
 
+    _sensor_path = sample.SensorPath(
+        sample.Part.CUSTOM_NOISE,
+        0,
+    )
+
+    def __init__(self, samples, type_=MsgType.SENSOR_NOISE):
+        super().__init__()
+        self.type_ = type_
+        self.samples = list(samples)
+
     @classmethod
     def from_buf(cls, type_, buf):
-        result = cls()
-        result.type_ = type_
-        result.samples = list(
-            unpack_all(buf, cls._sample)
+        return cls(
+            unpack_all(buf, cls._sample),
+            type_=type_
         )
-        return result
 
     def __repr__(self):
         return "<{}.{} samples={} at 0x{:x}>".format(
@@ -173,6 +254,14 @@ class NoiseMessage:
             self.samples,
             id(self),
         )
+
+    def get_samples(self):
+        for ts, value in self.samples:
+            yield sample.Sample(
+                ts,
+                self._sensor_path,
+                value,
+            )
 
 
 class LightMessage:
@@ -183,15 +272,27 @@ class LightMessage:
         "H4H"
     )
 
+    _ch_parts = [
+        sample.TCS3200Subpart.RED,
+        sample.TCS3200Subpart.GREEN,
+        sample.TCS3200Subpart.BLUE,
+        sample.TCS3200Subpart.CLEAR,
+    ]
+
+    def __init__(self, samples, type_=MsgType.SENSOR_LIGHT):
+        super().__init__()
+        self.type_ = type_
+        self.samples = list(samples)
+
     @classmethod
     def from_buf(cls, type_, buf):
-        result = cls()
-        result.type_ = type_
-        result.samples = list(
-            (timestamp, tuple(values))
-            for timestamp, *values in unpack_all(buf, cls._sample)
+        return cls(
+            (
+                (timestamp, tuple(values))
+                for timestamp, *values in unpack_all(buf, cls._sample)
+            ),
+            type_=type_,
         )
-        return result
 
     def __repr__(self):
         return "<{}.{} samples={} at 0x{:x}>".format(
@@ -201,36 +302,116 @@ class LightMessage:
             id(self),
         )
 
+    def get_samples(self):
+        for ts, channels in self.samples:
+            for ch_i, ch_subpart in enumerate(self._ch_parts):
+                yield sample.Sample(
+                    ts,
+                    sample.SensorPath(
+                        sample.Part.TCS3200,
+                        0,
+                        ch_subpart,
+                    ),
+                    channels[ch_i]
+                )
+
 
 class BME280Message:
     timestamp = None
-    dig88 = None
-    dige1 = None
-    readout = None
+    temperature = None
+    pressure = None
+    humidity = None
 
     _message = struct.Struct(
         "<"
         "H26s7s8s"
     )
 
+    def __init__(self, timestamp, temperature, pressure, humidity,
+                 type_=MsgType.SENSOR_BME280):
+        super().__init__()
+        self.type_ = type_
+        self.timestamp = timestamp
+        self.temperature = temperature
+        self.pressure = pressure
+        self.humidity = humidity
+
     @classmethod
     def from_buf(cls, type_, buf):
-        result = cls()
-        result.type_ = type_
-        buf, (result.timestamp,
-              result.dig88,
-              result.dige1,
-              result.readout) = unpack_and_splice(buf, cls._message)
+        buf, (timestamp,
+              dig88,
+              dige1,
+              readout) = unpack_and_splice(buf, cls._message)
         if buf:
             raise ValueError("too much data in buffer")
-        return result
+
+        calibration = bme280.get_calibration(dig88, dige1)
+        temp_raw, pressure_raw, humidity_raw = bme280.get_readout(readout)
+
+        temperature = bme280.compensate_temperature(
+            calibration,
+            temp_raw,
+        )
+
+        pressure = bme280.compensate_pressure(
+            calibration,
+            pressure_raw,
+            temperature,
+        )
+
+        humidity = bme280.compensate_humidity(
+            calibration,
+            humidity_raw,
+            temperature,
+        )
+
+        return cls(
+            timestamp,
+            temperature,
+            pressure,
+            humidity,
+            type_=type_,
+        )
 
     def __repr__(self):
-        return "<{}.{} readout={} at 0x{:x}>".format(
+        return "<{}.{} temperature={} pressure={} humidity={} at 0x{:x}>".format(
             __name__,
             type(self).__qualname__,
-            self.readout,
+            self.temperature,
+            self.pressure,
+            self.humidity,
             id(self),
+        )
+
+    def get_samples(self):
+        yield sample.Sample(
+            self.timestamp,
+            sample.SensorPath(
+                sample.Part.BME280,
+                0,
+                sample.BME280Subpart.TEMPERATURE,
+            ),
+            self.temperature,
+        )
+
+        yield sample.Sample(
+            self.timestamp,
+            sample.SensorPath(
+                sample.Part.BME280,
+                0,
+                sample.BME280Subpart.PRESSURE,
+            ),
+            self.pressure,
+        )
+
+        yield sample.Sample(
+            self.timestamp,
+            sample.SensorPath(
+                sample.Part.BME280,
+                0,
+                sample.BME280Subpart.HUMIDITY,
+            ),
+            self.humidity,
         )
 
 
@@ -243,19 +424,36 @@ class SensorStreamMessage:
         "Hh"
     )
 
+    _partmap = {
+        MsgType.SENSOR_STREAM_ACCEL_X: sample.LSM303DSubpart.ACCEL_X,
+        MsgType.SENSOR_STREAM_ACCEL_Y: sample.LSM303DSubpart.ACCEL_Y,
+        MsgType.SENSOR_STREAM_ACCEL_Z: sample.LSM303DSubpart.ACCEL_Z,
+        MsgType.SENSOR_STREAM_COMPASS_X: sample.LSM303DSubpart.COMPASS_X,
+        MsgType.SENSOR_STREAM_COMPASS_Y: sample.LSM303DSubpart.COMPASS_Y,
+        MsgType.SENSOR_STREAM_COMPASS_Z: sample.LSM303DSubpart.COMPASS_Z,
+    }
+
+    def __init__(self, type_, seq, data):
+        super().__init__()
+        self.type_ = type_
+        self.seq = seq
+        self.data = data
+
     @classmethod
     def from_buf(cls, type_, buf):
-        result = cls()
-        result.type_ = type_
-        buf, (result.seq, reference) = unpack_and_splice(
+        buf, (seq, reference) = unpack_and_splice(
             buf,
             cls._header,
         )
-        result.data = sensor_stream.decompress(
+        data = sensor_stream.decompress(
             reference,
             buf
         )
-        return result
+        return cls(
+            type_,
+            seq,
+            data,
+        )
 
     def __repr__(self):
         return (
@@ -269,6 +467,14 @@ class SensorStreamMessage:
                 self.data,
                 id(self),
             )
+        )
+
+    @property
+    def path(self):
+        return sample.SensorPath(
+            sample.Part.LSM303D,
+            0,
+            self._partmap[self.type_]
         )
 
 
@@ -302,6 +508,8 @@ def decode_message(buf):
 
 
 class SensorNode2Protocol(asyncio.DatagramProtocol):
+    on_message_received = aioxmpp.callbacks.Signal()
+
     def __init__(self, logger=None):
         self.logger = logger or logging.getLogger(
             ".".join(
@@ -312,9 +520,10 @@ class SensorNode2Protocol(asyncio.DatagramProtocol):
     def datagram_received(self, buf, addr):
         obj = decode_message(buf)
         if obj is None:
-            self.logger.warning("failed to decode message. type=0x%02x", buf[0])
+            self.logger.warning("failed to decode message. type=0x%02x",
+                                buf[0])
         else:
-            self.logger.debug("decoded object: %r", obj)
+            self.on_message_received(obj)
 
     def error_received(self, exc):
         pass
