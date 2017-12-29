@@ -3,6 +3,7 @@ def main():
     import logging
     import logging.config
     import toml
+    import sys
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -16,6 +17,8 @@ def main():
 
     with args.config as f:
         config = toml.load(f)
+
+    sys.path[:0] = config["python"].get("add_to_path", [])
 
     logging.basicConfig(
         level=logging.INFO

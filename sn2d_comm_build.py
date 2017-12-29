@@ -6,6 +6,7 @@ from cffi import FFI
 
 INCLUDES = [
     "../sensor-block/firmware/include/sbx/comm_sbx.h",
+    "../gateway/comm_esp8266.h"
 ]
 
 ffibuilder = FFI()

@@ -96,7 +96,8 @@ class TestStatusMessage(unittest.TestCase):
         struct.payload.status.imu.stream_state[1].period = 64
         struct.payload.status.i2c_metrics[0].transaction_overruns = 2
         struct.payload.status.i2c_metrics[1].transaction_overruns = 3
-        struct.payload.status.bme280_metrics.timeouts = 20
+        struct.payload.status.bme280_metrics[0].configure_status = 20
+        struct.payload.status.bme280_metrics[0].timeouts = 0
 
         result = protocol.StatusMessage.from_buf(
             unittest.mock.sentinel.type_,
@@ -146,6 +147,215 @@ class TestStatusMessage(unittest.TestCase):
         self.assertEqual(
             result.v2_bme280_metrics.timeouts,
             20,
+        )
+
+        self.assertEqual(
+            result.v2_bme280_metrics.configure_status,
+            0,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[0].timeouts,
+            20,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[0].configure_status,
+            0,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[1].timeouts,
+            0,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[1].configure_status,
+            0xff,
+        )
+
+    def test_from_buf_v3(self):
+        buf = bytearray(
+            _sn2d_comm.ffi.sizeof("uint8_t") +
+            _sn2d_comm.ffi.sizeof("struct sbx_msg_status_t")
+        )
+        struct = _sn2d_comm.ffi.cast(
+            "struct sbx_msg_t*",
+            _sn2d_comm.ffi.from_buffer(buf)
+        )
+
+        struct.type = _sn2d_comm.lib.STATUS
+        struct.payload.status.rtc = 12345678
+        struct.payload.status.uptime = 12345
+        struct.payload.status.protocol_version = 1
+        struct.payload.status.status_version = 3
+        struct.payload.status.imu.stream_state[0].sequence_number = 12
+        struct.payload.status.imu.stream_state[0].timestamp = 123
+        struct.payload.status.imu.stream_state[0].period = 5
+        struct.payload.status.imu.stream_state[1].sequence_number = 13
+        struct.payload.status.imu.stream_state[1].timestamp = 124
+        struct.payload.status.imu.stream_state[1].period = 64
+        struct.payload.status.i2c_metrics[0].transaction_overruns = 2
+        struct.payload.status.i2c_metrics[1].transaction_overruns = 3
+        struct.payload.status.bme280_metrics[0].configure_status = 0xff
+        struct.payload.status.bme280_metrics[0].timeouts = 20
+
+        result = protocol.StatusMessage.from_buf(
+            unittest.mock.sentinel.type_,
+            buf[1:]
+        )
+
+        self.assertEqual(
+            result.type_,
+            unittest.mock.sentinel.type_,
+        )
+
+        self.assertIsInstance(
+            result,
+            protocol.StatusMessage,
+        )
+
+        self.assertEqual(
+            result.rtc,
+            datetime.utcfromtimestamp(12345678),
+        )
+
+        self.assertEqual(
+            result.uptime,
+            12345,
+        )
+
+        self.assertEqual(
+            result.v1_accel_stream_state,
+            (12, 123, timedelta(milliseconds=5))
+        )
+
+        self.assertEqual(
+            result.v1_compass_stream_state,
+            (13, 124, timedelta(milliseconds=64))
+        )
+
+        self.assertEqual(
+            result.v2_i2c_metrics[0].transaction_overruns,
+            2,
+        )
+
+        self.assertEqual(
+            result.v2_i2c_metrics[1].transaction_overruns,
+            3,
+        )
+
+        self.assertEqual(
+            result.v2_bme280_metrics.timeouts,
+            20,
+        )
+
+        self.assertEqual(
+            result.v2_bme280_metrics.configure_status,
+            0xff,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[1].timeouts,
+            0,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[1].configure_status,
+            0xff,
+        )
+
+    def test_from_buf_v4(self):
+        buf = bytearray(
+            _sn2d_comm.ffi.sizeof("uint8_t") +
+            _sn2d_comm.ffi.sizeof("struct sbx_msg_status_t")
+        )
+        struct = _sn2d_comm.ffi.cast(
+            "struct sbx_msg_t*",
+            _sn2d_comm.ffi.from_buffer(buf)
+        )
+
+        struct.type = _sn2d_comm.lib.STATUS
+        struct.payload.status.rtc = 12345678
+        struct.payload.status.uptime = 12345
+        struct.payload.status.protocol_version = 1
+        struct.payload.status.status_version = 4
+        struct.payload.status.imu.stream_state[0].sequence_number = 12
+        struct.payload.status.imu.stream_state[0].timestamp = 123
+        struct.payload.status.imu.stream_state[0].period = 5
+        struct.payload.status.imu.stream_state[1].sequence_number = 13
+        struct.payload.status.imu.stream_state[1].timestamp = 124
+        struct.payload.status.imu.stream_state[1].period = 64
+        struct.payload.status.i2c_metrics[0].transaction_overruns = 2
+        struct.payload.status.i2c_metrics[1].transaction_overruns = 3
+        struct.payload.status.bme280_metrics[0].configure_status = 0x12
+        struct.payload.status.bme280_metrics[0].timeouts = 20
+        struct.payload.status.bme280_metrics[1].configure_status = 0x34
+        struct.payload.status.bme280_metrics[1].timeouts = 1204
+
+        result = protocol.StatusMessage.from_buf(
+            unittest.mock.sentinel.type_,
+            buf[1:]
+        )
+
+        self.assertEqual(
+            result.type_,
+            unittest.mock.sentinel.type_,
+        )
+
+        self.assertIsInstance(
+            result,
+            protocol.StatusMessage,
+        )
+
+        self.assertEqual(
+            result.rtc,
+            datetime.utcfromtimestamp(12345678),
+        )
+
+        self.assertEqual(
+            result.uptime,
+            12345,
+        )
+
+        self.assertEqual(
+            result.v1_accel_stream_state,
+            (12, 123, timedelta(milliseconds=5))
+        )
+
+        self.assertEqual(
+            result.v1_compass_stream_state,
+            (13, 124, timedelta(milliseconds=64))
+        )
+
+        self.assertEqual(
+            result.v2_i2c_metrics[0].transaction_overruns,
+            2,
+        )
+
+        self.assertEqual(
+            result.v2_i2c_metrics[1].transaction_overruns,
+            3,
+        )
+
+        self.assertEqual(
+            result.v2_bme280_metrics.timeouts,
+            20,
+        )
+
+        self.assertEqual(
+            result.v2_bme280_metrics.configure_status,
+            0x12,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[1].timeouts,
+            1204,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[1].configure_status,
+            0x34,
         )
 
 
@@ -576,6 +786,7 @@ class TestBME280Message(unittest.TestCase):
 
         struct.type = _sn2d_comm.lib.SENSOR_BME280
         struct.payload.bme280.timestamp = 12345
+        struct.payload.bme280.instance = 3
         struct.payload.bme280.dig88 = os.urandom(26)
         struct.payload.bme280.dige1 = os.urandom(7)
         struct.payload.bme280.readout = os.urandom(8)
@@ -624,6 +835,11 @@ class TestBME280Message(unittest.TestCase):
         self.assertEqual(
             result.timestamp,
             12345,
+        )
+
+        self.assertEqual(
+            result.instance,
+            3,
         )
 
         get_calibration.assert_called_once_with(

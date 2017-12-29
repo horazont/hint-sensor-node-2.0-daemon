@@ -1,15 +1,18 @@
 import io
 import logging
-import math
+import os
 import struct
 
 from datetime import datetime, timedelta
 
-from . import struct_utils, timeline, utils
+from hintutils import struct_utils, timeutils, timeline
 
 
 def decompress(average, packet):
-    values = [average]
+    def to_sint(v):
+        return struct.unpack("<h", struct.pack("<H", v))[0]
+
+    values = [to_sint(average)]
 
     remaining_payload_size = len(packet)
 
@@ -38,13 +41,13 @@ def decompress(average, packet):
 
     for compressed in bitmap:
         if compressed:
-            raw, = struct.unpack("<b", packet[:1])
+            raw, = struct.unpack("<B", packet[:1])
             packet = packet[1:]
-            values.append(raw + average)
         else:
-            raw, = struct.unpack("<h", packet[:2])
+            raw, = struct.unpack("<H", packet[:2])
             packet = packet[2:]
-            values.append(raw + average)
+        value = (raw + average) % 65536
+        values.append(to_sint(value))
 
     assert not packet
 
@@ -59,7 +62,7 @@ class Buffer:
                                  are emitted.
     :type persistent_directory: :class:`pathlib.Path`
 
-    .. method:: on_emit(rtc, period, samples)
+    .. method:: on_emit(rtc, period, samples, handle)
 
        A batch of samples is ready.
 
@@ -69,26 +72,44 @@ class Buffer:
        :type period: :class:`datetime.timedelta`
        :param samples: The sample values
        :type samples: :class:`collections.abc.Sequence`
+       :param handle: A handle object (see below)
+
+       The `handle` object has a :meth:`close` method which must be called
+       after the data has been successfully processed. Only then the data will
+       be deleted from the persistent storage.
 
     """
 
     _header = struct.Struct(
-        "<BQLQc",
+        "<BQLHLc",
     )
+
+    class _Handle:
+        def __init__(self, path):
+            super().__init__()
+            self.__path = path
+
+        def close(self):
+            try:
+                self.__path.unlink()
+            except OSError:
+                pass
 
     def __init__(self, persistent_directory,
                  on_emit,
                  *,
                  emit_after=timedelta(minutes=1),
-                 sample_type="H"):
+                 sample_type="H",
+                 logger=None):
         if len(sample_type) != 1 or not (32 <= ord(sample_type[0]) <= 127):
             raise ValueError("invalid sample type")
         super().__init__()
-        self.logger = logging.getLogger(
+        self.logger = logger or logging.getLogger(
             ".".join([__name__, type(self).__qualname__])
         )
         self.on_emit = on_emit
         persistent_directory.mkdir(exist_ok=True)
+        self.__dirfd = os.open(str(persistent_directory), os.O_DIRECTORY)
         self.__path = persistent_directory / "current"
 
         self.__sample_type = sample_type
@@ -99,6 +120,7 @@ class Buffer:
         self.batch_size = 1024
 
         self.__batch_seq_abs0 = None
+        self.__batch_seq_rel0 = None
         self.__batch_data = None
 
         self.__timeline = timeline.Timeline(
@@ -109,6 +131,9 @@ class Buffer:
         self.__alignment_t0 = None
         self.__alignment_data = []
         self._emit_existing()
+
+    def __del__(self):
+        os.close(self.__dirfd)
 
     def align(self, seq_rel, rtc, period):
         """
@@ -141,7 +166,7 @@ class Buffer:
 
         offset = self.__timeline.feed_and_transform(seq_rel)
         self.__timeline.reset(seq_rel)
-        if len(self.__alignment_data) > 2:
+        if len(self.__alignment_data) > 999:
             del self.__alignment_data[0]
 
         for i in range(len(self.__alignment_data)):
@@ -153,6 +178,11 @@ class Buffer:
 
         self.__alignment_data.append((0, rtc))
 
+        expected = (
+            self.__alignment_data[0][1] -
+            self.__alignment_data[0][0]*self.__period
+        )
+
         self.__alignment_t0 = rtc + sum(
             (
                 (old_rtc-old_seq_abs*self.__period)-rtc
@@ -161,6 +191,14 @@ class Buffer:
             ),
             timedelta(0)
         ) / len(self.__alignment_data)
+
+        self.logger.debug(
+            "difference: %s%s; drift: %s%s",
+            "-" if self.__alignment_t0 < rtc else "",
+            abs(self.__alignment_t0 - rtc),
+            "-" if expected < self.__alignment_t0 else "",
+            abs(expected - self.__alignment_t0)
+        )
 
         if self.__batch_seq_abs0 is not None:
             self.__batch_seq_abs0 -= offset
@@ -180,9 +218,11 @@ class Buffer:
                 self.__sample_struct.pack(sample)
                 for sample in samples
             )
-            f.flush()
+            os.fsync(f.fileno())
 
-        self.__timeline.forward(len(samples))
+        os.fsync(self.__dirfd)
+
+        # self.__timeline.forward(len(samples))
         self.__batch_data.extend(samples)
 
     def _get_batch_t0(self):
@@ -192,18 +232,25 @@ class Buffer:
         if not self.__batch_data:
             return
 
-        self.on_emit(
-            self.__alignment_t0 + self.__period * self.__batch_seq_abs0,
-            self.__period,
-            self.__batch_data,
-        )
-        self.__batch_seq_abs0 += len(self.__batch_data)
+        t0 = self.__alignment_t0 + self.__period * self.__batch_seq_abs0
+        data = self.__batch_data
+        nitems = len(data)
         self.__batch_data = []
 
-        try:
-            self.__path.unlink()
-        except OSError:
-            pass
+        persistent = self.__path.parent / str(t0.isoformat())
+        self.__path.rename(persistent)
+
+        self.on_emit(
+            t0,
+            self.__batch_seq_rel0,
+            self.__period,
+            data,
+            self._Handle(persistent)
+        )
+
+        self.__batch_seq_abs0 += nitems
+        self.__batch_seq_rel0 = (self.__batch_seq_rel0 + nitems) % (2**16)
+        self.__batch_data = []
 
     def submit(self, first_seq_rel, samples):
         """
@@ -222,13 +269,15 @@ class Buffer:
             first_seq_rel
         )
 
-        if self.__batch_seq_abs0 is None:
+        if self.__batch_seq_rel0 is None:
+            self.__batch_seq_rel0 = first_seq_rel
             self.__batch_seq_abs0 = first_seq_abs
             self.__batch_data = []
 
         if first_seq_abs != self.__batch_seq_abs0 + len(self.__batch_data):
             self._emit()
             self.__batch_seq_abs0 = first_seq_abs
+            self.__batch_seq_rel0 = first_seq_rel
 
         samples = list(samples)
         while len(samples) + len(self.__batch_data) >= self.batch_size:
@@ -241,18 +290,18 @@ class Buffer:
 
     def _make_header(self):
         t0 = self._get_batch_t0()
-        t0_s = utils.dt_to_ts(t0)
-        t0_us = t0.microsecond
+        t0_s, t0_us = timeutils.decompose_dt(t0)
 
         return self._header.pack(
             0x00,  # version
             t0_s, t0_us,
+            self.__batch_seq_rel0,
             round(self.__period.total_seconds() * 1e6),  # period
             self.__sample_type.encode("ascii"),  # sample type
         )
 
     def _parse_sample_data(self, f):
-        version, t0_s, t0_us, period, sample_type = \
+        version, t0_s, t0_us, seq0, period, sample_type = \
             struct_utils.read_single(
                 f,
                 self._header
@@ -286,34 +335,41 @@ class Buffer:
             period,
         )
 
-        return t0, period, data
+        return t0, seq0, period, data
 
     def _emit_existing(self):
-        try:
-            f = self.__path.open("rb")
-        except FileNotFoundError:
-            self.logger.debug(
-                "no existing data at %r",
-                str(self.__path),
-            )
-            return
-        except OSError:
-            self.logger.error(
-                "failed to load existing data at %r",
-                str(self.__path),
-            )
-            self.__path.unlink()
-            return
+        items = []
 
-        with f:
-            data = self._parse_sample_data(f)
+        for path in self.__path.parent.iterdir():
+            try:
+                f = path.open("rb")
+            except OSError:
+                self.logger.warning(
+                    "failed to recover data from %s",
+                    path,
+                )
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                continue
 
-        self.__path.unlink()
+            with f:
+                try:
+                    data = self._parse_sample_data(f)
+                except EOFError:
+                    data = None
 
-        if data is not None:
-            t0, period, data = data
-            self.on_emit(
-                t0,
-                period,
-                data,
-            )
+            if data is not None:
+                items.append(data)
+
+        items.sort(key=lambda x: x[0])
+
+        for t0, seq0, period, data in items:
+                self.on_emit(
+                    t0,
+                    seq0,
+                    period,
+                    data,
+                    self._Handle(path)
+                )

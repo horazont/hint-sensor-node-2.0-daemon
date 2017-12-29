@@ -10,7 +10,7 @@ from enum import Enum
 import aioxmpp.callbacks
 
 from . import sensor_stream, bme280, sample
-from .struct_utils import unpack_and_splice, unpack_all
+from hintutils.struct_utils import unpack_and_splice, unpack_all
 
 from _sn2d_comm import lib
 
@@ -68,20 +68,34 @@ class StatusMessage:
             return buf, result
 
     class BME280Metrics:
-        timeouts = None
+        configure_status = 0xff
+        timeouts = 0
 
         _v2 = struct.Struct(
             "<"
             "H"
         )
 
+        _v3 = struct.Struct(
+            "<"
+            "BH"
+        )
+
         @classmethod
         def unpack_and_splice(cls, version, buf):
             result = cls()
-            buf, (result.timeouts,) = unpack_and_splice(
-                buf,
-                cls._v2
-            )
+            if version < 3:
+                buf, (result.timeouts,) = unpack_and_splice(
+                    buf,
+                    cls._v2
+                )
+                result.configure_status = 0x00
+            else:
+                buf, (result.configure_status, result.timeouts,) = \
+                    unpack_and_splice(
+                        buf,
+                        cls._v3
+                    )
             return buf, result
 
     class IMUStreamState(collections.namedtuple(
@@ -127,18 +141,18 @@ class StatusMessage:
         if protocol_version != 1:
             raise ValueError("unsupported protocol")
 
-        if status_version > 2:
+        if status_version > 4:
             raise ValueError("unsupported status version")
 
         result.rtc = datetime.utcfromtimestamp(rtc)
         result.uptime = uptime
-        if 1 <= status_version <= 2:
+        if 1 <= status_version:
             buf, result.v1_accel_stream_state = \
                 cls.IMUStreamState.unpack_and_splice(status_version, buf)
             buf, result.v1_compass_stream_state = \
                 cls.IMUStreamState.unpack_and_splice(status_version, buf)
 
-        if 2 <= status_version <= 2:
+        if 2 <= status_version:
             result.v2_i2c_metrics = []
             for i2c_bus_no in range(2):
                 buf, metrics = cls.I2CMetrics.unpack_and_splice(
@@ -147,11 +161,33 @@ class StatusMessage:
                 )
                 result.v2_i2c_metrics.append(metrics)
 
-            buf, result.v2_bme280_metrics = \
-                cls.BME280Metrics.unpack_and_splice(
-                    status_version,
-                    buf,
-                )
+            if status_version >= 4:
+                result.v4_bme280_metrics = []
+                buf, metrics = \
+                    cls.BME280Metrics.unpack_and_splice(
+                        status_version,
+                        buf,
+                    )
+                result.v4_bme280_metrics.append(metrics)
+
+                buf, metrics = \
+                    cls.BME280Metrics.unpack_and_splice(
+                        status_version,
+                        buf,
+                    )
+                result.v4_bme280_metrics.append(metrics)
+
+                result.v2_bme280_metrics = result.v4_bme280_metrics[0]
+            else:
+                buf, result.v2_bme280_metrics = \
+                    cls.BME280Metrics.unpack_and_splice(
+                        status_version,
+                        buf,
+                    )
+                result.v4_bme280_metrics = [
+                    result.v2_bme280_metrics,
+                    cls.BME280Metrics(),
+                ]
 
         return result
 
@@ -318,20 +354,23 @@ class LightMessage:
 
 class BME280Message:
     timestamp = None
+    instance = None
     temperature = None
     pressure = None
     humidity = None
 
     _message = struct.Struct(
         "<"
-        "H26s7s8s"
+        "HB26s7s8s"
     )
 
     def __init__(self, timestamp, temperature, pressure, humidity,
-                 type_=MsgType.SENSOR_BME280):
+                 type_=MsgType.SENSOR_BME280,
+                 instance=0):
         super().__init__()
         self.type_ = type_
         self.timestamp = timestamp
+        self.instance = instance
         self.temperature = temperature
         self.pressure = pressure
         self.humidity = humidity
@@ -339,6 +378,7 @@ class BME280Message:
     @classmethod
     def from_buf(cls, type_, buf):
         buf, (timestamp,
+              instance,
               dig88,
               dige1,
               readout) = unpack_and_splice(buf, cls._message)
@@ -371,6 +411,7 @@ class BME280Message:
             pressure,
             humidity,
             type_=type_,
+            instance=instance,
         )
 
     def __repr__(self):
@@ -388,7 +429,7 @@ class BME280Message:
             self.timestamp,
             sample.SensorPath(
                 sample.Part.BME280,
-                0,
+                self.instance,
                 sample.BME280Subpart.TEMPERATURE,
             ),
             self.temperature,
@@ -398,7 +439,7 @@ class BME280Message:
             self.timestamp,
             sample.SensorPath(
                 sample.Part.BME280,
-                0,
+                self.instance,
                 sample.BME280Subpart.PRESSURE,
             ),
             self.pressure,
@@ -408,7 +449,7 @@ class BME280Message:
             self.timestamp,
             sample.SensorPath(
                 sample.Part.BME280,
-                0,
+                self.instance,
                 sample.BME280Subpart.HUMIDITY,
             ),
             self.humidity,
@@ -421,7 +462,7 @@ class SensorStreamMessage:
 
     _header = struct.Struct(
         "<"
-        "Hh"
+        "HH"
     )
 
     _partmap = {

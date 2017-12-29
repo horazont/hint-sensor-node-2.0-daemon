@@ -66,8 +66,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0,
+            0,
             self.period,
-            list(range(10))
+            list(range(10)),
+            unittest.mock.ANY,
         )
 
     def test_timestamp_is_adjusted_for_non_consecutive_samples(self):
@@ -92,8 +94,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0 + self.period * 12,
+            12,
             self.period,
-            list(range(200))
+            list(range(200)),
+            unittest.mock.ANY,
         )
 
     def test_emits_data_after_configured_interval(self):
@@ -106,8 +110,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0,
+            0,
             self.period,
-            list(range(200))
+            list(range(200)),
+            unittest.mock.ANY,
         )
 
     def test_emission_works_with_overlapping_batches(self):
@@ -120,8 +126,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0,
+            0,
             self.period,
-            list(range(200))
+            list(range(200)),
+            unittest.mock.ANY,
         )
         self.on_emit.reset_mock()
 
@@ -132,8 +140,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0 + self.period * 200,
+            200,
             self.period,
-            list(range(200, 400))
+            list(range(200, 400)),
+            unittest.mock.ANY,
         )
         self.on_emit.reset_mock()
 
@@ -144,8 +154,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0 + self.period * 400,
+            400,
             self.period,
-            list(range(400, 600))
+            list(range(400, 600)),
+            unittest.mock.ANY,
         )
         self.on_emit.reset_mock()
 
@@ -159,13 +171,17 @@ class TestBuffer(unittest.TestCase):
             [
                 unittest.mock.call(
                     self.t0 + self.period * 600,
+                    600,
                     self.period,
-                    list(range(600, 800))
+                    list(range(600, 800)),
+                    unittest.mock.ANY,
                 ),
                 unittest.mock.call(
                     self.t0 + self.period * 800,
+                    800,
                     self.period,
-                    list(range(800, 1000))
+                    list(range(800, 1000)),
+                    unittest.mock.ANY,
                 )
             ]
         )
@@ -186,11 +202,39 @@ class TestBuffer(unittest.TestCase):
 
         on_emit.assert_called_once_with(
             self.t0,
+            0,
             self.period,
-            list(range(190))
+            list(range(190)),
+            unittest.mock.ANY,
         )
 
-    def test_no_reemission_of_emitted_data(self):
+    def test_emit_emitted_but_not_closed_data_on_construction(self):
+        self.buf.batch_size = 200
+
+        self.buf.submit(
+            0,
+            list(range(400))
+        )
+
+        self.on_emit.mock_calls[0][1][-1].close()
+
+        on_emit = unittest.mock.Mock()
+        on_emit.return_value = None
+
+        sensor_stream.Buffer(
+            self.bufdir,
+            on_emit,
+        )
+
+        on_emit.assert_called_once_with(
+            self.t0 + self.period * 200,
+            200,
+            self.period,
+            list(range(200, 400)),
+            unittest.mock.ANY,
+        )
+
+    def test_no_reemission_of_closed_data(self):
         self.buf.batch_size = 200
         self.buf.submit(
             0,
@@ -198,9 +242,12 @@ class TestBuffer(unittest.TestCase):
         )
         self.on_emit.assert_called_once_with(
             self.t0,
+            0,
             self.period,
-            list(range(200))
+            list(range(200)),
+            unittest.mock.ANY,
         )
+        self.on_emit.mock_calls[0][1][-1].close()
 
         on_emit = unittest.mock.Mock()
         on_emit.return_value = None
@@ -211,6 +258,52 @@ class TestBuffer(unittest.TestCase):
         )
 
         on_emit.assert_not_called()
+
+    def test_data_stays_until_closed(self):
+        self.buf.batch_size = 200
+        self.buf.submit(
+            0,
+            list(range(200))
+        )
+        self.on_emit.assert_called_once_with(
+            self.t0,
+            0,
+            self.period,
+            list(range(200)),
+            unittest.mock.ANY,
+        )
+
+        on_emit = unittest.mock.Mock()
+        on_emit.return_value = None
+
+        sensor_stream.Buffer(
+            self.bufdir,
+            on_emit,
+        )
+
+        on_emit.assert_called_once_with(
+            self.t0,
+            0,
+            self.period,
+            list(range(200)),
+            unittest.mock.ANY,
+        )
+
+        on_emit = unittest.mock.Mock()
+        on_emit.return_value = None
+
+        sensor_stream.Buffer(
+            self.bufdir,
+            on_emit,
+        )
+
+        on_emit.assert_called_once_with(
+            self.t0,
+            0,
+            self.period,
+            list(range(200)),
+            unittest.mock.ANY,
+        )
 
     def test_sequence_number_wraparound(self):
         self.buf.batch_size = 200
@@ -234,8 +327,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0 + self.period * 65400,
+            65400,
             self.period,
             list(range(200)),
+            unittest.mock.ANY,
         )
 
     def test_sequence_number_wraparound_single_large_batch(self):
@@ -249,8 +344,10 @@ class TestBuffer(unittest.TestCase):
         self.assertIn(
             unittest.mock.call(
                 self.t0 + self.period * 65400,
+                65400,
                 self.period,
                 list(range(200)),
+                unittest.mock.ANY,
             ),
             self.on_emit.mock_calls
         )
@@ -265,8 +362,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0,
+            0,
             self.period,
             list(range(65536)) + list(range(14464)),
+            unittest.mock.ANY,
         )
         self.on_emit.reset_mock()
 
@@ -277,8 +376,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0 + timedelta(seconds=400),
+            80000 % 65536,
             self.period,
             list(range(14464, 65536)) + list(range(28928)),
+            unittest.mock.ANY,
         )
 
     def test_sequence_number_multiple_wraparounds_within_batch(self):
@@ -291,8 +392,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0,
+            0,
             self.period,
             list(range(65536)) + list(range(65536)) + list(range(28928)),
+            unittest.mock.ANY,
         )
         self.on_emit.reset_mock()
 
@@ -310,8 +413,10 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             self.t0 + timedelta(seconds=800),
+            160000 % 65536,
             self.period,
-            list(range(28928, 65536)) + list(range(65536)) + list(range(57856))
+            list(range(28928, 65536)) + list(range(65536)) + list(range(57856)),
+            unittest.mock.ANY,
         )
 
     def test_align_adapts_t0_during_active_batch(self):
@@ -356,6 +461,8 @@ class TestBuffer(unittest.TestCase):
 
         self.on_emit.assert_called_once_with(
             t0.replace(microsecond=5001),
+            0,
             self.period,
             list(range(200)),
+            unittest.mock.ANY,
         )

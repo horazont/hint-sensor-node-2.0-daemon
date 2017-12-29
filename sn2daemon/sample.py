@@ -43,6 +43,13 @@ class LSM303DSubpart(Enum):
     COMPASS_Z = 'compass-z'
 
 
+PART_SUBPARTS = {
+    Part.BME280: BME280Subpart,
+    Part.TCS3200: TCS3200Subpart,
+    Part.LSM303D: LSM303DSubpart,
+}
+
+
 _SensorPath = collections.namedtuple(
     "_SensorPath",
     ["part", "instance", "subpart"]
