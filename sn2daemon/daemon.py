@@ -652,6 +652,9 @@ class SensorNode2Daemon:
             abs(now - self._rtcifier.map_to_rtc(obj.uptime)),
         )
 
+        if not self.__config.get("logging", {}).get("verbose_status", False):
+            return
+
         if obj.v1_accel_stream_state is not None:
             self.logger.debug(
                 "status: "
