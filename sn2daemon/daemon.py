@@ -401,6 +401,8 @@ class SensorNode2Daemon:
         sender = self.__xmpp.client.summon(SenderService)
         sender.peer_jid = aioxmpp.JID.fromstr(config["sink"]["jid"])
         sender.add_task(self._submit_streams_to)
+        sender.add_task(self._submit_streams_to)
+        sender.add_task(self._submit_sample_batches_to)
         sender.add_task(self._submit_sample_batches_to)
 
         self.__stream_queue = asyncio.Queue(
