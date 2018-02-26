@@ -493,7 +493,7 @@ class SensorNode2Daemon:
             ct1 = time.monotonic()
             self.logger.debug("sample compression took %.1f ms (%.0f%%)",
                               (ct1-ct0) * 1000,
-                              (ct1-ct0) / (period*len(data)).total_seconds())
+                              ((ct1-ct0) / (period*len(data)).total_seconds())*100)
 
             payload = hintxso.sensor.Query()
             payload.stream = hintxso.sensor.Stream()
