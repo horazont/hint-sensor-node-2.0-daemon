@@ -361,15 +361,15 @@ class Buffer:
                     data = None
 
             if data is not None:
-                items.append(data)
+                items.append((data, path))
 
         items.sort(key=lambda x: x[0])
 
-        for t0, seq0, period, data in items:
-                self.on_emit(
-                    t0,
-                    seq0,
-                    period,
-                    data,
-                    self._Handle(path)
-                )
+        for (t0, seq0, period, data), path in items:
+            self.on_emit(
+                t0,
+                seq0,
+                period,
+                data,
+                self._Handle(path)
+            )
