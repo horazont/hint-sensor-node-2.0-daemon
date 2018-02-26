@@ -474,7 +474,8 @@ class SensorNode2Daemon:
                 "batch_size", 1024
             )
 
-    async def _submit_streams_to(self, full_jid, cached_item=None):
+    async def _submit_streams_to(self, full_jid):
+        cached_item = None
         while True:
             if cached_item is None:
                 item = await self.__stream_queue.get()
@@ -493,7 +494,10 @@ class SensorNode2Daemon:
             ct1 = time.monotonic()
             self.logger.debug("sample compression took %.1f ms (%.0f%%)",
                               (ct1-ct0) * 1000,
-                              ((ct1-ct0) / (period*len(data)).total_seconds())*100)
+                              (
+                                  (ct1-ct0) /
+                                  (period*len(data)).total_seconds()
+                              ) * 100)
 
             payload = hintxso.sensor.Query()
             payload.stream = hintxso.sensor.Stream()
@@ -517,7 +521,9 @@ class SensorNode2Daemon:
                               len(bz2_data),
                               full_jid)
             try:
+                ct0 = time.monotonic()
                 await self.__xmpp.client.stream.send(iq)
+                ct1 = time.monotonic()
             except aioxmpp.errors.XMPPError as exc:
                 self.logger.warning(
                     "failed to submit data for ts %s (%s)",
@@ -525,8 +531,16 @@ class SensorNode2Daemon:
                     exc
                 )
                 await asyncio.sleep(1)
-                return item
-            handle.close()
+                cached_item = item
+                continue
+            else:
+                handle.close()
+                self.logger.debug("submission took %.1f ms (%.0f%%)",
+                                  (ct1-ct0) * 1000,
+                                  (
+                                      (ct1-ct0) /
+                                      (period*len(data)).total_seconds()
+                                  ) * 100)
 
     async def _submit_sample_batches_to(self, full_jid, cached_item=None):
         while True:
