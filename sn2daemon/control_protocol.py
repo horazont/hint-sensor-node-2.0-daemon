@@ -4,6 +4,7 @@ import logging
 import random
 import socket
 import struct
+import time
 
 from enum import Enum
 
@@ -50,7 +51,7 @@ class ControlProtocol(asyncio.DatagramProtocol):
 
     def _timeout(self, key):
         try:
-            fut = self.__waiters.pop(key)
+            fut, _ = self.__waiters.pop(key)
         except KeyError:
             return
 
@@ -58,17 +59,17 @@ class ControlProtocol(asyncio.DatagramProtocol):
 
     def _fut_done(self, key, fut):
         try:
-            fut_in_mapping = self.__waiters.pop(key)
+            fut_in_mapping, sent_timestamp = self.__waiters.pop(key)
         except KeyError:
             return
 
         if fut_in_mapping is not fut:
-            self.__waiters[key] = fut_in_mapping
+            self.__waiters[key] = fut_in_mapping, sent_timestamp
 
     def _make_fut(self, key, timeout):
         loop = asyncio.get_event_loop()
         fut = asyncio.Future(loop=loop)
-        self.__waiters[key] = fut
+        self.__waiters[key] = fut, time.monotonic()
         fut.add_done_callback(functools.partial(self._fut_done, key))
         loop.call_later(timeout, self._timeout, key)
         return fut
@@ -79,14 +80,16 @@ class ControlProtocol(asyncio.DatagramProtocol):
             self.logger.debug("received corrupted frame: %r", buf)
             return
 
+        now = time.monotonic()
+
         try:
-            fut = self.__waiters.pop(header)
+            fut, sent_timestamp = self.__waiters.pop(header)
         except KeyError:
             self.logger.debug("received unexpected frame: %r", buf)
             return
 
         if not fut.done():
-            fut.set_result((addr, buf))
+            fut.set_result((addr, buf, now - sent_timestamp))
 
     def error_received(self, exc):
         pass
@@ -152,7 +155,7 @@ class ControlProtocol(asyncio.DatagramProtocol):
         addr = (remote_address, 7284)
         self.__transport.sendto(pkt, addr=addr)
 
-        addr, response = await fut
+        addr, response, latency = await fut
 
         _, _, version, dest_addr, sntp_addr = SetupPacket.unpack(
             response
@@ -160,4 +163,4 @@ class ControlProtocol(asyncio.DatagramProtocol):
         dest_addr = un_C_str(dest_addr)
         sntp_addr = un_C_str(sntp_addr)
 
-        return addr[0], (dest_addr, sntp_addr)
+        return addr[0], (dest_addr, sntp_addr), latency

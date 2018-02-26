@@ -393,6 +393,8 @@ class SensorNode2Daemon:
             )
         }
 
+        self._cputime_prev_data = None
+
         self.__xmpp = botlib.BotCore(config["xmpp"])
         self.__xmpp.client.summon(aioxmpp.PresenceClient)
         sender = self.__xmpp.client.summon(SenderService)
@@ -587,7 +589,8 @@ class SensorNode2Daemon:
 
     def _enqueue_sample_batches(self, batches):
         while True:
-            self.logger.debug("enqueue-ing %d batches", len(batches))
+            self.logger.debug("enqueue-ing %d batches: %r", len(batches),
+                              batches)
             try:
                 self.__sample_queue.put_nowait(batches)
             except asyncio.QueueFull:
@@ -615,12 +618,18 @@ class SensorNode2Daemon:
         self._control_protocol = control_protocol.ControlProtocol()
         return self._control_protocol
 
-    def _print_status(self, obj):
+    def _print_status(self, obj, now):
         self.logger.debug(
             "status: "
             "rtc = %s, uptime = %d",
             obj.rtc,
             obj.uptime,
+        )
+        self.logger.debug(
+            "status: "
+            "rtc offset = %s, rtcified uptime offset = %s",
+            abs(now - obj.rtc),
+            abs(now - self._rtcifier.map_to_rtc(obj.uptime)),
         )
 
         if obj.v1_accel_stream_state is not None:
@@ -651,36 +660,86 @@ class SensorNode2Daemon:
             self.logger.debug("status: bme280[%d]: timeouts = %d",
                               i, bme_metrics.timeouts)
 
-        return
+        if obj.v5_tx_metrics is not None:
+            self.logger.debug(
+                "status: tx buffers: allocated = %d (most: %d, %.0f%%), "
+                "ready = %d, total = %d",
+                obj.v5_tx_metrics.buffers_allocated,
+                obj.v5_tx_metrics.most_buffers_allocated,
+                (obj.v5_tx_metrics.most_buffers_allocated /
+                 obj.v5_tx_metrics.buffers_total * 100),
+                obj.v5_tx_metrics.buffers_ready,
+                obj.v5_tx_metrics.buffers_total,
+            )
 
-        print("--- BEGIN STATUS MESSAGE ---")
-        print("rtc = {}".format(obj.rtc))
-        print("uptime = {}".format(obj.uptime))
-        for type_, stream in zip(["accel", "compass"],
-                                 [obj.v1_accel_stream_state,
-                                  obj.v1_compass_stream_state]):
-            print("{} stream:".format(type_))
-            if stream is not None:
-                print("  seq       = ", stream[0])
-                print("  timestamp = ", stream[1])
-                print("  period    = ", stream[2])
+        if obj.v5_task_metrics is not None:
+            if self._cputime_prev_data is not None:
+                old_uptime, old_task_metrics = self._cputime_prev_data
+                dt = (obj.uptime - old_uptime) % (2**16)
             else:
-                print("  absent")
+                dt = 1
+                old_task_metrics = obj.v5_task_metrics
 
-        for i, bus_metrics in enumerate((obj.v2_i2c_metrics or []), 1):
-            print("I2C{}:".format(i))
-            print("  transaction overruns: {}".format(
-                bus_metrics.transaction_overruns
-            ))
+            self.logger.debug(
+                "status: "
+                "cpu metrics: "
+                "idle ticks: %5d (%5.1f%%)",
+                obj.v5_task_metrics.idle_ticks,
+                ((obj.v5_task_metrics.idle_ticks -
+                  old_task_metrics.idle_ticks) % (2**16)) / dt * 100
 
-        if obj.v2_bme280_metrics:
-            print("BME280:")
-            print("  status: 0x{:02x}".format(
-                obj.v2_bme280_metrics.configure_status
-            ))
-            print("  timeouts: {}".format(obj.v2_bme280_metrics.timeouts))
+            )
+            for i, (task, old_task) in enumerate(
+                    zip(obj.v5_task_metrics.tasks,
+                        old_task_metrics.tasks)):
+                self.logger.debug(
+                    "status: "
+                    "cpu metrics: "
+                    "  task[%2d]: %5d (%5.1f%%)",
+                    i,
+                    task.cpu_ticks,
+                    ((task.cpu_ticks - old_task.cpu_ticks) % (2**16)) / dt * 100
+                )
 
-        print("--- END STATUS MESSAGE ---")
+            self._cputime_prev_data = (
+                obj.uptime,
+                obj.v5_task_metrics,
+            )
+
+        if obj.v6_cpu_metrics is not None:
+            self.logger.debug(
+                "status: "
+                "cpu metrics: "
+                "idle : %5d",
+                obj.v6_cpu_metrics.idle,
+            )
+
+            self.logger.debug(
+                "status: "
+                "cpu metrics: "
+                "sched: %5d",
+                obj.v6_cpu_metrics.sched,
+            )
+
+            max_len = max(map(len, obj.v6_cpu_metrics.interrupts.keys()))
+
+            for intr, hits in sorted(obj.v6_cpu_metrics.interrupts.items()):
+                self.logger.debug(
+                    "status: "
+                    "cpu metrics: "
+                    "intr[%{}s]: %5d".format(max_len),
+                    intr,
+                    hits,
+                )
+
+            for i, hits in enumerate(obj.v6_cpu_metrics.tasks):
+                self.logger.debug(
+                    "status: "
+                    "cpu metrics: "
+                    "task[%2d]: %5d",
+                    i,
+                    hits,
+                )
 
     def _process_non_status_message(self, obj):
         if hasattr(obj, "get_samples"):
@@ -727,7 +786,8 @@ class SensorNode2Daemon:
         # print(obj)
 
         if obj.type_ == protocol.MsgType.STATUS:
-            retardation = datetime.utcnow() - obj.rtc
+            now = datetime.utcnow()
+            retardation = now - obj.rtc
             if retardation > timedelta(seconds=60):
                 # suspicious, discard
                 self.logger.debug(
@@ -762,7 +822,7 @@ class SensorNode2Daemon:
                         period,
                     )
 
-            self._print_status(obj)
+            self._print_status(obj, now)
 
         if self._had_status:
             if self.__pre_status_buffer:
@@ -787,14 +847,16 @@ class SensorNode2Daemon:
             ctrl_timeout,
             local_address,
             sntp_server):
-        remote_addr, (dest_addr, sntp_addr) = \
+        remote_addr, (dest_addr, sntp_addr), rtt = \
             await self._control_protocol.detect(
                 ctrl_remote_address,
                 timeout=ctrl_timeout,
             )
 
         self.logger.debug(
-            "found ESP at %s", remote_addr
+            "found ESP at %s (rtt/2 = %s)",
+            remote_addr,
+            timedelta(seconds=rtt/2),
         )
 
         if (dest_addr != local_address or
@@ -802,7 +864,7 @@ class SensorNode2Daemon:
                  sntp_server != sntp_addr)):
             self.logger.info("ESP needs re-configuration")
             await self._control_protocol.configure(
-                ctrl_remote_address,
+                remote_addr,
                 local_address,
                 sntp_server or sntp_addr,
                 timeout=ctrl_timeout,

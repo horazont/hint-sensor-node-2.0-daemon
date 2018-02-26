@@ -358,6 +358,141 @@ class TestStatusMessage(unittest.TestCase):
             0x34,
         )
 
+        self.assertIsNone(result.v5_tx_metrics)
+        self.assertIsNone(result.v5_task_metrics)
+
+    def test_from_buf_v5(self):
+        buf = bytearray(
+            _sn2d_comm.ffi.sizeof("uint8_t") +
+            _sn2d_comm.ffi.sizeof("struct sbx_msg_status_t") +
+            _sn2d_comm.ffi.sizeof("struct sbx_msg_status_task_t") * 3
+        )
+        struct = _sn2d_comm.ffi.cast(
+            "struct sbx_msg_t*",
+            _sn2d_comm.ffi.from_buffer(buf)
+        )
+
+        struct.type = _sn2d_comm.lib.STATUS
+        struct.payload.status.rtc = 12345678
+        struct.payload.status.uptime = 12345
+        struct.payload.status.protocol_version = 1
+        struct.payload.status.status_version = 5
+        struct.payload.status.imu.stream_state[0].sequence_number = 12
+        struct.payload.status.imu.stream_state[0].timestamp = 123
+        struct.payload.status.imu.stream_state[0].period = 5
+        struct.payload.status.imu.stream_state[1].sequence_number = 13
+        struct.payload.status.imu.stream_state[1].timestamp = 124
+        struct.payload.status.imu.stream_state[1].period = 64
+        struct.payload.status.i2c_metrics[0].transaction_overruns = 2
+        struct.payload.status.i2c_metrics[1].transaction_overruns = 3
+        struct.payload.status.bme280_metrics[0].configure_status = 0x12
+        struct.payload.status.bme280_metrics[0].timeouts = 20
+        struct.payload.status.bme280_metrics[1].configure_status = 0x34
+        struct.payload.status.bme280_metrics[1].timeouts = 1204
+        struct.payload.status.tx.buffers.most_allocated = 100
+        struct.payload.status.tx.buffers.allocated = 102
+        struct.payload.status.tx.buffers.ready = 103
+        struct.payload.status.tx.buffers.total = 104
+        struct.payload.status.task_count = 2
+        struct.payload.status.task_metrics[0].cpu_ticks = 10
+        struct.payload.status.task_metrics[1].cpu_ticks = 20
+        struct.payload.status.task_metrics[2].cpu_ticks = 30
+
+        result = protocol.StatusMessage.from_buf(
+            unittest.mock.sentinel.type_,
+            buf[1:]
+        )
+
+        self.assertEqual(
+            result.type_,
+            unittest.mock.sentinel.type_,
+        )
+
+        self.assertIsInstance(
+            result,
+            protocol.StatusMessage,
+        )
+
+        self.assertEqual(
+            result.rtc,
+            datetime.utcfromtimestamp(12345678),
+        )
+
+        self.assertEqual(
+            result.uptime,
+            12345,
+        )
+
+        self.assertEqual(
+            result.v1_accel_stream_state,
+            (12, 123, timedelta(milliseconds=5))
+        )
+
+        self.assertEqual(
+            result.v1_compass_stream_state,
+            (13, 124, timedelta(milliseconds=64))
+        )
+
+        self.assertEqual(
+            result.v2_i2c_metrics[0].transaction_overruns,
+            2,
+        )
+
+        self.assertEqual(
+            result.v2_i2c_metrics[1].transaction_overruns,
+            3,
+        )
+
+        self.assertEqual(
+            result.v2_bme280_metrics.timeouts,
+            20,
+        )
+
+        self.assertEqual(
+            result.v2_bme280_metrics.configure_status,
+            0x12,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[1].timeouts,
+            1204,
+        )
+
+        self.assertEqual(
+            result.v4_bme280_metrics[1].configure_status,
+            0x34,
+        )
+
+        self.assertEqual(
+            result.v5_tx_metrics.most_buffers_allocated,
+            100,
+        )
+
+        self.assertEqual(
+            result.v5_tx_metrics.buffers_allocated,
+            102,
+        )
+
+        self.assertEqual(
+            result.v5_tx_metrics.buffers_ready,
+            103,
+        )
+
+        self.assertEqual(
+            result.v5_tx_metrics.buffers_total,
+            104,
+        )
+
+        self.assertEqual(
+            result.v5_task_metrics.idle_ticks,
+            10,
+        )
+
+        self.assertSequenceEqual(
+            result.v5_task_metrics.tasks,
+            ((20,), (30,)),
+        )
+
 
 class TestDS18B20Message(unittest.TestCase):
     def setUp(self):

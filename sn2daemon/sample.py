@@ -43,6 +43,12 @@ class LSM303DSubpart(Enum):
     COMPASS_Z = 'compass-z'
 
 
+class CustomNoiseSubpart(Enum):
+    RMS = 'rms'
+    MIN = 'min'
+    MAX = 'max'
+
+
 PART_SUBPARTS = {
     Part.BME280: BME280Subpart,
     Part.TCS3200: TCS3200Subpart,

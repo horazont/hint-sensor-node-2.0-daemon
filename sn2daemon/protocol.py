@@ -2,6 +2,7 @@ import asyncio
 import binascii
 import collections
 import logging
+import math
 import struct
 
 from datetime import datetime, timedelta
@@ -49,6 +50,9 @@ class StatusMessage:
     v1_accel_stream_state = None
     v1_compass_stream_state = None
     v2_i2c_metrics = None
+    v5_tx_metrics = None
+    v5_task_metrics = None
+    v6_cpu_metrics = None
 
     class I2CMetrics:
         transaction_overruns = None
@@ -116,6 +120,113 @@ class StatusMessage:
             period = timedelta(milliseconds=period)
             return buf, cls(seq, ts, period)
 
+    class TXMetrics(collections.namedtuple(
+            "_TXState",
+            ["most_buffers_allocated",
+             "buffers_allocated",
+             "buffers_ready",
+             "buffers_total"])):
+
+        _v1 = struct.Struct(
+            "<"
+            "HHHH"
+        )
+
+        @classmethod
+        def unpack_and_splice(cls, version, buf):
+            buf, (most_buffers_allocated,
+                  buffers_allocated,
+                  buffers_ready,
+                  buffers_total) = unpack_and_splice(
+                buf,
+                cls._v1,
+            )
+
+            return buf, cls(most_buffers_allocated,
+                            buffers_allocated,
+                            buffers_ready,
+                            buffers_total)
+
+    class TasksMetrics(collections.namedtuple(
+            "_TasksMetrics",
+            ["idle_ticks", "tasks"])):
+
+        class TaskMetrics(collections.namedtuple(
+            "_TaskMetrics",
+            ["cpu_ticks"])):
+
+            _v1 = struct.Struct(
+                "<"
+                "H"
+            )
+
+            @classmethod
+            def unpack_and_splice(cls, version, buf):
+                buf, (cpu_ticks,) = unpack_and_splice(
+                    buf,
+                    cls._v1,
+                )
+                return buf, cls(cpu_ticks)
+
+        _v1 = struct.Struct(
+            "<"
+            "BH"
+        )
+
+        @classmethod
+        def unpack_and_splice(cls, version, buf):
+            buf, (count, idle_ticks) = unpack_and_splice(
+                buf,
+                cls._v1,
+            )
+
+            tasks = []
+            for i in range(count):
+                buf, task = cls.TaskMetrics.unpack_and_splice(
+                    version,
+                    buf,
+                )
+                tasks.append(task)
+
+            return buf, cls(idle_ticks, tuple(tasks))
+
+    class CPUMetrics(collections.namedtuple(
+            "_CPUMetrics",
+            [
+                "idle",
+                "sched",
+                "interrupts",
+                "tasks",
+            ])):
+
+        _v1 = struct.Struct(
+            "<"+
+            "H"*0x20
+        )
+
+        INTERRUPT_MAP = {
+            getattr(lib, key): key[9:].lower()
+            for key in dir(lib)
+            if key.startswith("CPU_INTR_")
+        }
+
+        @classmethod
+        def unpack_and_splice(cls, version, buf):
+            buf, (*data,) = unpack_and_splice(
+                buf,
+                cls._v1,
+            )
+
+            idle = data[lib.CPU_IDLE]
+            sched = data[lib.CPU_SCHED]
+            interrupts = {
+                name: data[index]
+                for index, name in cls.INTERRUPT_MAP.items()
+            }
+            tasks = data[lib.CPU_TASK_BASE:]
+
+            return buf, cls(idle, sched, interrupts, tasks)
+
     _base_header = struct.Struct(
         "<"
         "LHBB"
@@ -141,7 +252,7 @@ class StatusMessage:
         if protocol_version != 1:
             raise ValueError("unsupported protocol")
 
-        if status_version > 4:
+        if status_version > 6:
             raise ValueError("unsupported status version")
 
         result.rtc = datetime.utcfromtimestamp(rtc)
@@ -188,6 +299,24 @@ class StatusMessage:
                     result.v2_bme280_metrics,
                     cls.BME280Metrics(),
                 ]
+
+        if 5 <= status_version:
+            buf, result.v5_tx_metrics = cls.TXMetrics.unpack_and_splice(
+                status_version,
+                buf,
+            )
+
+        if 5 <= status_version < 6:
+            buf, result.v5_task_metrics = cls.TasksMetrics.unpack_and_splice(
+                status_version,
+                buf,
+            )
+
+        if 6 <= status_version:
+            buf, result.v6_cpu_metrics = cls.CPUMetrics.unpack_and_splice(
+                status_version,
+                buf,
+            )
 
         return result
 
@@ -261,9 +390,14 @@ class DS18B20Message:
 class NoiseMessage:
     samples = None
 
+    _header = struct.Struct(
+        "<"
+        "B"
+    )
+
     _sample = struct.Struct(
         "<"
-        "HH"
+        "HLhh"
     )
 
     _sensor_path = sample.SensorPath(
@@ -278,8 +412,13 @@ class NoiseMessage:
 
     @classmethod
     def from_buf(cls, type_, buf):
+        buf, (factor,) = unpack_and_splice(buf, cls._header)
         return cls(
-            unpack_all(buf, cls._sample),
+            [
+                (ts, sqavg / (2**24-1) / factor, min_, max_)
+                for ts, sqavg, min_, max_
+                in unpack_all(buf, cls._sample)
+            ],
             type_=type_
         )
 
@@ -292,11 +431,25 @@ class NoiseMessage:
         )
 
     def get_samples(self):
-        for ts, value in self.samples:
+        for ts, sqavg, min_, max_ in self.samples:
+            try:
+                rms_db = 20*math.log(math.sqrt(sqavg), 10)
+            except ValueError:
+                rms_db = -96
             yield sample.Sample(
                 ts,
-                self._sensor_path,
-                value,
+                self._sensor_path.replace(subpart=sample.CustomNoiseSubpart.RMS),
+                rms_db,
+            )
+            yield sample.Sample(
+                ts,
+                self._sensor_path.replace(subpart=sample.CustomNoiseSubpart.MIN),
+                min_ / (2**15-1)
+            )
+            yield sample.Sample(
+                ts,
+                self._sensor_path.replace(subpart=sample.CustomNoiseSubpart.MAX),
+                max_ / (2**15-1)
             )
 
 
