@@ -5,6 +5,7 @@ import functools
 import logging
 import math
 import pathlib
+import time
 
 from datetime import datetime, timedelta
 
@@ -483,11 +484,16 @@ class SensorNode2Daemon:
             path, t0, seq0, period, data, handle = item
 
             bin_data = array.array("h", data).tobytes()
+            ct0 = time.monotonic()
             bz2_data = await self.__loop.run_in_executor(
                 None,
                 bz2.compress,
                 bin_data
             )
+            ct1 = time.monotonic()
+            self.logger.debug("sample compression took %.1f ms (%.0f%%)",
+                              (ct1-ct0) * 1000,
+                              (ct1-ct0) / (period*len(data)).total_seconds())
 
             payload = hintxso.sensor.Query()
             payload.stream = hintxso.sensor.Stream()
