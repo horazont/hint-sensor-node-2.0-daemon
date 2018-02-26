@@ -533,12 +533,14 @@ class SensorNode2Daemon:
                 return item
             else:
                 handle.close()
-                self.logger.debug("submission took %.1f ms (%.0f%%)",
+                self.logger.debug("submission took %.1f ms (%.0f%%); "
+                                  "remaining queue length: %d",
                                   (ct1-ct0) * 1000,
                                   (
                                       (ct1-ct0) /
                                       (period*len(data)).total_seconds()
-                                  ) * 100)
+                                  ) * 100,
+                                  self.__stream_queue.qsize())
 
     async def _submit_sample_batches_to(self, full_jid, cached_item=None):
         while True:
