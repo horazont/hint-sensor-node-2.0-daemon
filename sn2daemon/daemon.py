@@ -474,8 +474,7 @@ class SensorNode2Daemon:
                 "batch_size", 1024
             )
 
-    async def _submit_streams_to(self, full_jid):
-        cached_item = None
+    async def _submit_streams_to(self, full_jid, cached_item=None):
         while True:
             if cached_item is None:
                 item = await self.__stream_queue.get()
@@ -531,8 +530,7 @@ class SensorNode2Daemon:
                     exc
                 )
                 await asyncio.sleep(1)
-                cached_item = item
-                continue
+                return item
             else:
                 handle.close()
                 self.logger.debug("submission took %.1f ms (%.0f%%)",
