@@ -376,10 +376,15 @@ def _rewrite_batch_create(rule, logger):
             locals_[key.value] = value
 
         try:
-            new_value = eval(precondition, globals_, locals_)
+            precondition_result = eval(precondition, globals_, locals_)
         except NameError as exc:
             logger.warning("failed to evaluate precondition rule",
                            exc_info=True)
+            return sample_batch
+
+        if not precondition_result:
+            logger.debug("create precondition failed on sample batch %r",
+                         sample_batch)
             return sample_batch
 
         try:
