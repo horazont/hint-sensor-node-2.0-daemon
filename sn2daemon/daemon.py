@@ -343,7 +343,7 @@ def _rewrite_batch_value(rule, logger):
 class FakeEnum:
     def __init__(self, value):
         super().__init__()
-        self.value
+        self.value = value
 
 
 def _rewrite_batch_create(rule, logger):
