@@ -418,10 +418,17 @@ class SampleBatchRewriter:
 
     def _compile_rewrite_batch_rule(self, batch_rule, logger):
         try:
-            rewrite_builder = self.REWRITERS[batch_rule["rewrite"]]
+            rewrite_builder_name = batch_rule["rewrite"]
         except KeyError:
             raise ValueError(
-                "missing 'rewrite' key in rewrite rule {!r}".format(rule)
+                "missing 'rewrite' key in rewrite rule {!r}".format(batch_rule)
+            )
+
+        try:
+            rewrite_builder = self.REWRITERS[rewrite_builder_name]
+        except KeyError:
+            raise ValueError(
+                "unknown rewriter: {!r}".format(rewrite_builder_name)
             )
 
         return rewrite_builder(batch_rule, logger)
