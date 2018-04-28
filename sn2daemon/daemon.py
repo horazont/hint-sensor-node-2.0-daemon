@@ -340,9 +340,15 @@ def _rewrite_batch_value(rule, logger):
     return do_rewrite_batch_value
 
 
+class FakeEnum:
+    def __init__(self, value):
+        super().__init__()
+        self.value
+
+
 def _rewrite_batch_create(rule, logger):
     part = sample.Part(rule["part"])
-    new_subpart = rule["subpart"]
+    new_subpart = FakeEnum(rule["subpart"])
     instance = rule.get("instance")
     expression = compile(
         rule["new_value"],
