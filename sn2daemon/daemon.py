@@ -291,6 +291,11 @@ class IndividualSampleRewriter:
         return sample_obj
 
 
+CALC_REWRITE_GLOBALS = {
+    "exp": math.exp,
+}
+
+
 def _rewrite_batch_value(rule, logger):
     part = sample.Part(rule["part"])
     subpart = sample.PART_SUBPARTS[part](rule["subpart"])
@@ -302,9 +307,7 @@ def _rewrite_batch_value(rule, logger):
     )
     constants = rule.get("constants", {})
 
-    globals_ = {
-        "exp": math.exp,
-    }
+    globals_ = CALC_REWRITE_GLOBALS.copy()
 
     def do_rewrite_batch_value(sample_batch):
         ts, bare_path, samples = sample_batch
@@ -337,6 +340,61 @@ def _rewrite_batch_value(rule, logger):
     return do_rewrite_batch_value
 
 
+def _rewrite_batch_create(rule, logger):
+    part = sample.Part(rule["part"])
+    new_subpart = rule["subpart"]
+    instance = rule.get("instance")
+    expression = compile(
+        rule["new_value"],
+        '<rewrite rule {!r}>'.format(rule),
+        'eval'
+    )
+    precondition = compile(
+        rule.get("precondition", None),
+        '<rewrite rule {!r}>'.format(rule),
+        'eval'
+    )
+    constants = rule.get("constants", {})
+
+    globals_ = CALC_REWRITE_GLOBALS.copy()
+
+    def do_rewrite_batch_value(sample_batch):
+        ts, bare_path, samples = sample_batch
+        if bare_path.part != part:
+            return sample_batch
+        if instance is not None and bare_path.instance != instance:
+            return sample_batch
+
+        locals_ = dict(constants)
+        for key, value in samples.items():
+            locals_[key.value] = value
+
+        try:
+            new_value = eval(precondition, globals_, locals_)
+        except NameError as exc:
+            logger.warning("failed to evaluate precondition rule",
+                           exc_info=True)
+            return sample_batch
+
+        try:
+            new_value = eval(expression, globals_, locals_)
+        except NameError as exc:
+            logger.warning("failed to evaluate rewrite rule",
+                           exc_info=True)
+            return sample_batch
+
+        new_samples = dict(samples)
+        new_samples[new_subpart] = new_value
+
+        logger.debug("created %r value (%r -> %r)",
+                     new_subpart,
+                     new_value)
+
+        return ts, bare_path, new_samples
+
+    return do_rewrite_batch_value
+
+
 class SampleBatchRewriter:
     def __init__(self, config, logger):
         super().__init__()
@@ -349,6 +407,7 @@ class SampleBatchRewriter:
 
     REWRITERS = {
         "value": _rewrite_batch_value,
+        "create": _rewrite_batch_create,
     }
 
     def _compile_rewrite_batch_rule(self, batch_rule, logger):
