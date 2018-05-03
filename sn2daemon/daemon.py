@@ -16,7 +16,7 @@ import hintlib.services
 import hintlib.xso
 
 from . import protocol, sensor_stream, control_protocol
-from hintlib import utils, rewrite, sample
+from hintlib import utils, rewrite, sample, timeline
 
 
 def dig(mapping, *args, default=None):
@@ -120,11 +120,11 @@ class SensorNode2Daemon:
             config.get("samples", {}).get("queue_length", 16)
         self._sample_service.module_name = config["sensors"]["module_name"]
 
-        self._timeline = utils.Timeline(
+        self._timeline = timeline.Timeline(
             2**16,  # wraparound
             30000,  # 30s slack
         )
-        self._rtcifier = utils.RTCifier(
+        self._rtcifier = timeline.RTCifier(
             self._timeline,
             self.logger.getChild("rtcifier")
         )
