@@ -5,7 +5,7 @@ import struct
 
 from datetime import datetime, timedelta
 
-from hintutils import struct_utils, timeutils, timeline
+from hintlib import utils, timeline
 
 
 def decompress(average, packet):
@@ -290,7 +290,7 @@ class Buffer:
 
     def _make_header(self):
         t0 = self._get_batch_t0()
-        t0_s, t0_us = timeutils.decompose_dt(t0)
+        t0_s, t0_us = utils.decompose_dt(t0)
 
         return self._header.pack(
             0x00,  # version
@@ -302,7 +302,7 @@ class Buffer:
 
     def _parse_sample_data(self, f):
         version, t0_s, t0_us, seq0, period, sample_type = \
-            struct_utils.read_single(
+            utils.read_single(
                 f,
                 self._header
             )
@@ -323,7 +323,7 @@ class Buffer:
         period = timedelta(microseconds=period)
         data = [
             value
-            for value, in struct_utils.read_all(
+            for value, in utils.read_all(
                     f,
                     self.__sample_struct)
         ]
