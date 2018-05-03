@@ -177,7 +177,10 @@ class SensorNode2Daemon:
             )
 
     def _on_stream_emit(self, path, t0, seq0, period, data, handle):
-        item = path, t0, seq0, period, data, handle
+        range_ = self._stream_ranges.get(
+            (path.part, path.subpart), 1
+        )
+        item = path, t0, seq0, period, data, range_, handle
         self._stream_service.submit_block(item)
 
     def _enqueue_sample_batches(self, batches):
