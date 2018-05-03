@@ -110,12 +110,12 @@ class SensorNode2Daemon:
         sender.peer_jid = aioxmpp.JID.fromstr(config["sink"]["jid"])
 
         self._stream_service = \
-            self._xmpp.client.summon(hintlib.services.StreamSubmitterService)
+            self.__xmpp.client.summon(hintlib.services.StreamSubmitterService)
         self._stream_service.queue_size = \
             config.get("streams", {}).get("queue_length", 16)
         self._stream_service.module_name = config["sensors"]["module_name"]
         self._sample_service = \
-            self._xmpp.client.summon(hintlib.services.BatchSubmitterService)
+            self.__xmpp.client.summon(hintlib.services.BatchSubmitterService)
         self._sample_service.queue_size = \
             config.get("samples", {}).get("queue_length", 16)
         self._sample_service.module_name = config["sensors"]["module_name"]
