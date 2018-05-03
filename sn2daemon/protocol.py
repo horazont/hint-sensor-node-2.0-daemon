@@ -10,8 +10,9 @@ from enum import Enum
 
 import aioxmpp.callbacks
 
-from . import sensor_stream, bme280, sample
-from hintutils.struct_utils import unpack_and_splice, unpack_all
+from . import sensor_stream, bme280
+from hintlib.utils import unpack_and_splice, unpack_all
+from hintlib import sample
 
 from _sn2d_comm import lib
 
@@ -200,7 +201,7 @@ class StatusMessage:
             ])):
 
         _v1 = struct.Struct(
-            "<"+
+            "<" +
             "H"*0x20
         )
 
@@ -432,23 +433,26 @@ class NoiseMessage:
 
     def get_samples(self):
         for ts, sqavg, min_, max_ in self.samples:
-            try:
-                rms_db = 20*math.log(math.sqrt(sqavg), 10)
-            except ValueError:
-                rms_db = -96
+            rms = math.sqrt(sqavg)
             yield sample.Sample(
                 ts,
-                self._sensor_path.replace(subpart=sample.CustomNoiseSubpart.RMS),
-                rms_db,
+                self._sensor_path.replace(
+                    subpart=sample.CustomNoiseSubpart.RMS
+                ),
+                rms,
             )
             yield sample.Sample(
                 ts,
-                self._sensor_path.replace(subpart=sample.CustomNoiseSubpart.MIN),
+                self._sensor_path.replace(
+                    subpart=sample.CustomNoiseSubpart.MIN
+                ),
                 min_ / (2**15-1)
             )
             yield sample.Sample(
                 ts,
-                self._sensor_path.replace(subpart=sample.CustomNoiseSubpart.MAX),
+                self._sensor_path.replace(
+                    subpart=sample.CustomNoiseSubpart.MAX
+                ),
                 max_ / (2**15-1)
             )
 
