@@ -184,7 +184,10 @@ class SensorNode2Daemon:
         if self._protocol is not None:
             self.logger.warning("protocol already initialised!")
         self._protocol = protocol.SensorNode2Protocol()
-        self._protocol.on_message_received.connect(self._on_message)
+        self._protocol.on_message_received.connect(
+            self._on_message,
+            self._protocol.on_message_received.ASYNC_WITH_LOOP(None),
+        )
         return self._protocol
 
     def _make_control_protocol(self):
