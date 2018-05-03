@@ -104,7 +104,10 @@ class SensorNode2Daemon:
 
         self._cputime_prev_data = None
 
-        self.__xmpp = hintlib.core.BotCore(config["xmpp"])
+        self.__xmpp = hintlib.core.BotCore(
+            config["xmpp"],
+            client_logger=self.logger.getChild("client")
+        )
         self.__xmpp.client.summon(aioxmpp.PresenceClient)
         sender = self.__xmpp.client.summon(hintlib.services.SenderService)
         sender.peer_jid = aioxmpp.JID.fromstr(config["sink"]["jid"])
