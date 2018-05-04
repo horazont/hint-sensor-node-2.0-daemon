@@ -758,7 +758,8 @@ class SensorNode2Protocol(asyncio.Protocol):
                 obj = decode_message(view)
             except Exception as exc:
                 self.logger.warning("failed to decode message: %r",
-                                    bytes(view))
+                                    bytes(view),
+                                    exc_info=True)
                 obj = None
             finally:
                 del view
