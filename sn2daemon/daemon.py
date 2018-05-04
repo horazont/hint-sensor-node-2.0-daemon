@@ -188,7 +188,8 @@ class SensorNode2Daemon:
 
     def _make_protocol(self):
         if self._protocol is not None:
-            self.logger.warning("protocol already initialised!")
+            return self._protocol
+
         self._protocol = protocol.SensorNode2Protocol()
         self._protocol.on_message_received.connect(
             self._on_message,
@@ -434,22 +435,39 @@ class SensorNode2Daemon:
             ctrl_timeout,
             local_address,
             sntp_server):
+
+        ts_threshold = time.monotonic() - ctrl_timeout
+
+        if (self._protocol is not None and
+                self._protocol.last_message_ts is not None and
+                self._protocol.last_message_ts >= ts_threshold and
+                self._protocol.connected):
+            return
+
+        self.logger.debug(
+            "no activity from ESP, scanning ..."
+        )
+
         remote_addr, (dest_addr, sntp_addr), rtt = \
             await self._control_protocol.detect(
                 ctrl_remote_address,
                 timeout=ctrl_timeout,
             )
 
-        self.logger.debug(
-            "found ESP at %s (rtt/2 = %s)",
+        self.logger.info(
+            "found ESP at %s (rtt/2 = %s). dest_addr set to %s",
             remote_addr,
             timedelta(seconds=rtt/2),
+            dest_addr,
         )
+
+        if self._protocol is not None:
+            self._protocol.acceptable_sources = {remote_addr}
 
         if (dest_addr != local_address or
                 (sntp_server is not None and
                  sntp_server != sntp_addr)):
-            self.logger.info("ESP needs re-configuration")
+            self.logger.info("re-configuring ESP")
             await self._control_protocol.configure(
                 remote_addr,
                 local_address,
@@ -469,13 +487,14 @@ class SensorNode2Daemon:
             self.__config, 'net', 'detect', 'timeout',
             default=5)
 
+        # ensure protocol is initialised
+        self._make_protocol()
+
         async with self.__xmpp:
-            await self.__loop.create_datagram_endpoint(
+            await self.__loop.create_server(
                 self._make_protocol,
-                local_addr=(
-                    local_address,
-                    7284,
-                ),
+                host=local_address,
+                port=7284,
             )
 
             await self.__loop.create_datagram_endpoint(

@@ -4,6 +4,7 @@ import collections
 import logging
 import math
 import struct
+import time
 
 from datetime import datetime, timedelta
 from enum import Enum
@@ -705,8 +706,12 @@ def decode_message(buf):
     return cls.from_buf(type_, buf[1:])
 
 
-class SensorNode2Protocol(asyncio.DatagramProtocol):
+class SensorNode2Protocol(asyncio.Protocol):
     on_message_received = aioxmpp.callbacks.Signal()
+
+    class State(Enum):
+        LENGTH = 0
+        PAYLOAD = 1
 
     def __init__(self, logger=None):
         self.logger = logger or logging.getLogger(
@@ -715,19 +720,96 @@ class SensorNode2Protocol(asyncio.DatagramProtocol):
             )
         )
 
-    def datagram_received(self, buf, addr):
-        obj = decode_message(buf)
-        if obj is None:
-            self.logger.warning("failed to decode message. type=0x%02x",
-                                buf[0])
-        else:
-            self.on_message_received(obj)
+        self._buffer = bytearray()
+        self._length = None
+        self._state = self.State.LENGTH
+        self.acceptable_sources = set()
+        self._last_data_ts = None
+        self._transport = None
 
-    def error_received(self, exc):
-        pass
+    @property
+    def last_message_ts(self):
+        return self._last_data_ts
+
+    @property
+    def connected(self):
+        return self._transport is not None
+
+    def _push(self, buf):
+        self._last_data_ts = time.monotonic()
+        self._buffer.extend(buf)
+
+    def _process(self):
+        if self._state == self.State.LENGTH:
+            if len(self._buffer) < 2:
+                return False
+            self._length = int.from_bytes(self._buffer[:2], "little")
+            del self._buffer[:2]
+            self._state = self.State.PAYLOAD
+            return True
+        elif self._state == self.State.PAYLOAD:
+            if len(self._buffer) < self._length:
+                return False
+
+            view = memoryview(self._buffer)[:self._length]
+            type_ = view[0]
+
+            try:
+                obj = decode_message(view)
+            except Exception as exc:
+                self.logger.warning("failed to decode message: %r",
+                                    bytes(view))
+                obj = None
+            finally:
+                del view
+                del self._buffer[:self._length]
+
+            if obj is None:
+                self.logger.warning("failed to decode message. type=0x%02x",
+                                    type_)
+            else:
+                self.on_message_received(obj)
+
+            self._state = self.State.LENGTH
+            return True
+        else:
+            raise RuntimeError("invalid state")
+
+    def data_received(self, buf):
+        self._push(buf)
+        while self._process():
+            pass
 
     def connection_made(self, transport):
-        self.logger.debug("connected via %r", transport)
+        if self._transport is not None:
+            self.logger.warning("a transport is already connected, rejecting")
+            transport.abort()
+            transport.close()
+            return
+
+        peername = transport.get_extra_info("peername")
+        if peername[0] not in self.acceptable_sources:
+            self.logger.warning(
+                "rejecting inbound connection from %s as it is not a valid "
+                "source address (acceptable are %r)",
+                peername[0],
+                self.acceptable_sources
+            )
+            transport.abort()
+            transport.close()
+            return
+
+        # write EOF immediately -- we won’t be sending, ever
+        try:
+            transport.write_eof()
+        except NotImplementedError:
+            pass
+
+        self._transport = transport
+        self.logger.debug("connected via %r to %s",
+                          self._transport,
+                          peername)
 
     def connection_lost(self, exc):
-        pass
+        self.logger.warning("lost connection: %s", exc)
+        self._transport = None
