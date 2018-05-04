@@ -696,12 +696,12 @@ def decode_message(buf):
     try:
         type_ = MsgType(buf[0])
     except ValueError:
-        return None
+        raise ValueError("unknown message type: 0x{:02x}".format(buf[0]))
 
     try:
         cls = msgtype_to_cls[type_]
     except KeyError:
-        return None
+        raise ValueError("no handler for message: {}".format(type_))
 
     return cls.from_buf(type_, buf[1:])
 
