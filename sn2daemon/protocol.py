@@ -782,12 +782,6 @@ class SensorNode2Protocol(asyncio.Protocol):
             pass
 
     def connection_made(self, transport):
-        if self._transport is not None:
-            self.logger.warning("a transport is already connected, rejecting")
-            transport.abort()
-            transport.close()
-            return
-
         peername = transport.get_extra_info("peername")
         if peername[0] not in self.acceptable_sources:
             self.logger.warning(
@@ -798,6 +792,15 @@ class SensorNode2Protocol(asyncio.Protocol):
             )
             transport.abort()
             transport.close()
+            return
+
+        if self._transport is not None:
+            self.logger.warning(
+                "a transport is already connected, "
+                "replacing with new"
+            )
+            self._transport.abort()
+            self._transport.close()
             return
 
         # write EOF immediately -- we won’t be sending, ever
@@ -813,4 +816,3 @@ class SensorNode2Protocol(asyncio.Protocol):
 
     def connection_lost(self, exc):
         self.logger.warning("lost connection: %s", exc)
-        self._transport = None
