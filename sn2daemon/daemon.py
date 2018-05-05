@@ -133,7 +133,7 @@ class SensorNode2Daemon:
         )
         self._had_status = False
 
-        self._protocol = None
+        self._server = None
         self._control_protocol = None
 
         imu_datadir = pathlib.Path(
@@ -185,17 +185,6 @@ class SensorNode2Daemon:
 
     def _enqueue_sample_batches(self, batches):
         self._sample_service.enqueue_batches(batches)
-
-    def _make_protocol(self):
-        if self._protocol is not None:
-            return self._protocol
-
-        self._protocol = protocol.SensorNode2Protocol()
-        self._protocol.on_message_received.connect(
-            self._on_message,
-            self._protocol.on_message_received.ASYNC_WITH_LOOP(None),
-        )
-        return self._protocol
 
     def _make_control_protocol(self):
         if self._control_protocol is not None:
@@ -438,10 +427,10 @@ class SensorNode2Daemon:
 
         ts_threshold = time.monotonic() - ctrl_timeout
 
-        if (self._protocol is not None and
-                self._protocol.last_message_ts is not None and
-                self._protocol.last_message_ts >= ts_threshold and
-                self._protocol.connected):
+        if (self._server is not None and
+                self._server.last_data_ts is not None and
+                self._server.last_data_ts >= ts_threshold and
+                self._server.connected):
             return
 
         self.logger.debug(
@@ -461,8 +450,8 @@ class SensorNode2Daemon:
             dest_addr,
         )
 
-        if self._protocol is not None:
-            self._protocol.acceptable_sources = {remote_addr}
+        self._server.acceptable_sources.clear()
+        self._server.acceptable_sources.add(remote_addr)
 
         if (dest_addr != local_address or
                 (sntp_server is not None and
@@ -487,15 +476,13 @@ class SensorNode2Daemon:
             self.__config, 'net', 'detect', 'timeout',
             default=5)
 
-        # ensure protocol is initialised
-        self._make_protocol()
-
         async with self.__xmpp:
-            await self.__loop.create_server(
-                self._make_protocol,
-                host=local_address,
-                port=7284,
+            self._server = protocol.SensorNode2Server(self.__loop)
+            self._server.on_message_received.connect(
+                self._on_message,
+                self._server.on_message_received.ASYNC_WITH_LOOP(None),
             )
+            await self._server.start(local_address, 7284)
 
             await self.__loop.create_datagram_endpoint(
                 self._make_control_protocol,

@@ -1,6 +1,7 @@
 import asyncio
 import binascii
 import collections
+import functools
 import logging
 import math
 import struct
@@ -708,6 +709,8 @@ def decode_message(buf):
 
 class SensorNode2Protocol(asyncio.Protocol):
     on_message_received = aioxmpp.callbacks.Signal()
+    on_heartbeat = aioxmpp.callbacks.Signal()
+    on_disconnect = aioxmpp.callbacks.Signal()
 
     class State(Enum):
         LENGTH = 0
@@ -724,26 +727,34 @@ class SensorNode2Protocol(asyncio.Protocol):
         self._length = None
         self._state = self.State.LENGTH
         self.acceptable_sources = set()
-        self._last_data_ts = None
         self._transport = None
 
-    @property
-    def last_message_ts(self):
-        return self._last_data_ts
-
-    @property
-    def connected(self):
-        return self._transport is not None
-
     def _push(self, buf):
-        self._last_data_ts = time.monotonic()
+        self.on_heartbeat()
         self._buffer.extend(buf)
+
+    def _force_disconnect(self):
+        if self._transport is not None:
+            self._transport.abort()
+            self._transport.close()
+        self._buffer.clear()
+        self._state = self.State.LENGTH
 
     def _process(self):
         if self._state == self.State.LENGTH:
             if len(self._buffer) < 2:
                 return False
             self._length = int.from_bytes(self._buffer[:2], "little")
+
+            if not (0 < self._length < 512):
+                self.logger.warning(
+                    "invalid packet length (%d). assuming desync and "
+                    "killing transport.",
+                    self._length,
+                )
+                self._force_disconnect()
+                return False
+
             del self._buffer[:2]
             self._state = self.State.PAYLOAD
             return True
@@ -751,23 +762,24 @@ class SensorNode2Protocol(asyncio.Protocol):
             if len(self._buffer) < self._length:
                 return False
 
-            view = memoryview(self._buffer)[:self._length]
-            type_ = view[0]
+            pkt = bytes(self._buffer[:self._length])
+            del self._buffer[:self._length]
+            type_ = pkt[0]
 
             try:
-                obj = decode_message(view)
+                obj = decode_message(pkt)
             except Exception as exc:
                 self.logger.warning("failed to decode message: %r",
-                                    bytes(view),
+                                    pkt,
                                     exc_info=True)
-                obj = None
-            finally:
-                del view
-                del self._buffer[:self._length]
+                self._force_disconnect()
+                return False
 
             if obj is None:
                 self.logger.warning("failed to decode message. type=0x%02x",
                                     type_)
+                self._force_disconnect()
+                return False
             else:
                 self.on_message_received(obj)
 
@@ -794,15 +806,6 @@ class SensorNode2Protocol(asyncio.Protocol):
             transport.close()
             return
 
-        if self._transport is not None:
-            self.logger.warning(
-                "a transport is already connected, "
-                "replacing with new"
-            )
-            self._transport.abort()
-            self._transport.close()
-            return
-
         # write EOF immediately -- we won’t be sending, ever
         try:
             transport.write_eof()
@@ -816,3 +819,57 @@ class SensorNode2Protocol(asyncio.Protocol):
 
     def connection_lost(self, exc):
         self.logger.warning("lost connection: %s", exc)
+        self.on_disconnect()
+
+
+class SensorNode2Server:
+    on_message_received = aioxmpp.callbacks.Signal()
+
+    def __init__(self, loop):
+        super().__init__()
+        self.loop = loop
+        self._server = None
+        self._clients = []
+        self._last_data_ts = None
+        self.acceptable_sources = set()
+
+    async def start(self, host, port):
+        self._server = await self.loop.create_server(
+            self._make_protocol,
+            host=host,
+            port=port,
+        )
+
+    @property
+    def last_data_ts(self) -> int:
+        return self._last_data_ts
+
+    @property
+    def connected(self) -> bool:
+        return bool(self._clients)
+
+    def _heartbeat(self):
+        self._last_data_ts = time.monotonic()
+
+    def _disconnected(self, protocol):
+        self._clients.remove(protocol)
+        # disconnect from the event
+        return True
+
+    def _make_protocol(self) -> SensorNode2Protocol:
+        protocol = SensorNode2Protocol()
+        protocol.acceptable_sources = self.acceptable_sources
+        protocol.on_heartbeat.connect(
+            self._heartbeat,
+        )
+        protocol.on_message_received.connect(
+            self.on_message_received,
+        )
+        protocol.on_disconnect.connect(
+            functools.partial(
+                self._disconnected,
+                protocol,
+            )
+        )
+        self._clients.append(protocol)
+        return protocol
