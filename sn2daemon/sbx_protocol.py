@@ -267,7 +267,7 @@ class StatusMessage:
         if status_version > 6:
             raise ValueError("unsupported status version")
 
-        result.rtc = datetime.utcfromtimestamp(rtc)
+        result.rtc = None
         result.uptime = uptime
         if 1 <= status_version:
             buf, result.v1_accel_stream_state = \
