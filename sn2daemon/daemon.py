@@ -15,7 +15,7 @@ import hintlib.core
 import hintlib.services
 import hintlib.xso
 
-from . import protocol, sensor_stream, control_protocol
+from . import sbx_protocol, datagram_stream, sensor_stream
 from hintlib import utils, rewrite, sample, timeline
 
 
@@ -30,7 +30,10 @@ def dig(mapping, *args, default=None):
 
 def rtcify_samples(samples, rtcifier):
     for s in samples:
-        yield s.replace(timestamp=rtcifier.map_to_rtc(s.timestamp))
+        if isinstance(s.timestamp, datetime):
+            yield s
+        else:
+            yield s.replace(timestamp=rtcifier.map_to_rtc(s.timestamp))
 
 
 def deenumify_samples(samples):
@@ -133,9 +136,6 @@ class SensorNode2Daemon:
         )
         self._had_status = False
 
-        self._server = None
-        self._control_protocol = None
-
         imu_datadir = pathlib.Path(
             config["streams"]["datadir"]
         )
@@ -186,23 +186,17 @@ class SensorNode2Daemon:
     def _enqueue_sample_batches(self, batches):
         self._sample_service.enqueue_batches(batches)
 
-    def _make_control_protocol(self):
-        if self._control_protocol is not None:
-            self.logger.warning("control_protocol already initialised!")
-        self._control_protocol = control_protocol.ControlProtocol()
-        return self._control_protocol
-
-    def _print_status(self, obj, now):
+    def _print_status(self, rtc_timestamp, obj, now):
         self.logger.debug(
             "status: "
             "rtc = %s, uptime = %d",
-            obj.rtc,
+            rtc_timestamp,
             obj.uptime,
         )
         self.logger.debug(
             "status: "
             "rtc offset = %s, rtcified uptime offset = %s",
-            abs(now - obj.rtc),
+            abs(now - rtc_timestamp),
             abs(now - self._rtcifier.map_to_rtc(obj.uptime)),
         )
 
@@ -350,7 +344,7 @@ class SensorNode2Daemon:
             #                 value,
             #             ))
 
-        elif isinstance(obj, protocol.SensorStreamMessage):
+        elif isinstance(obj, sbx_protocol.SensorStreamMessage):
             stream_buffer = self._stream_buffers[
                 obj.path
             ]
@@ -359,12 +353,12 @@ class SensorNode2Daemon:
                 obj.data
             )
 
-    def _on_message(self, obj):
+    def _on_message(self, rtc_timestamp, obj):
         # print(obj)
 
-        if obj.type_ == protocol.MsgType.STATUS:
+        if obj.type_ == sbx_protocol.MsgType.STATUS:
             now = datetime.utcnow()
-            retardation = now - obj.rtc
+            retardation = now - rtc_timestamp
             if retardation > timedelta(seconds=60):
                 # suspicious, discard
                 self.logger.debug(
@@ -375,7 +369,7 @@ class SensorNode2Daemon:
 
             self._had_status = True
             self._rtcifier.align(
-                obj.rtc,
+                rtc_timestamp,
                 obj.uptime
             )
 
@@ -399,7 +393,7 @@ class SensorNode2Daemon:
                         period,
                     )
 
-            self._print_status(obj, now)
+            self._print_status(rtc_timestamp, obj, now)
 
         if self._had_status:
             if self.__pre_status_buffer:
@@ -418,52 +412,6 @@ class SensorNode2Daemon:
         except:  # NOQA
             self.logger.exception("%r failed", task)
 
-    async def _detect_and_configure(
-            self,
-            ctrl_remote_address,
-            ctrl_timeout,
-            local_address,
-            sntp_server):
-
-        ts_threshold = time.monotonic() - ctrl_timeout
-
-        if (self._server is not None and
-                self._server.last_data_ts is not None and
-                self._server.last_data_ts >= ts_threshold and
-                self._server.connected):
-            return
-
-        self.logger.debug(
-            "no activity from ESP, scanning ..."
-        )
-
-        remote_addr, (dest_addr, sntp_addr), rtt = \
-            await self._control_protocol.detect(
-                ctrl_remote_address,
-                timeout=ctrl_timeout,
-            )
-
-        self.logger.info(
-            "found ESP at %s (rtt/2 = %s). dest_addr set to %s",
-            remote_addr,
-            timedelta(seconds=rtt/2),
-            dest_addr,
-        )
-
-        self._server.acceptable_sources.clear()
-        self._server.acceptable_sources.add(remote_addr)
-
-        if (dest_addr != local_address or
-                (sntp_server is not None and
-                 sntp_server != sntp_addr)):
-            self.logger.info("re-configuring ESP")
-            await self._control_protocol.configure(
-                remote_addr,
-                local_address,
-                sntp_server or sntp_addr,
-                timeout=ctrl_timeout,
-            )
-
     async def run(self):
         interval = dig(self.__config, 'net', 'detect', 'interval', default=5)
         local_address = self.__config['net']['local_address']
@@ -476,35 +424,26 @@ class SensorNode2Daemon:
             self.__config, 'net', 'detect', 'timeout',
             default=5)
 
-        async with self.__xmpp:
-            self._server = protocol.SensorNode2Server(self.__loop)
-            self._server.on_message_received.connect(
-                self._on_message,
-                self._server.on_message_received.ASYNC_WITH_LOOP(None),
-            )
-            await self._server.start(local_address, 7284)
+        protocol = datagram_stream.DatagramStreamProtocol(
+            sbx_protocol.SENDER_PORT,
+        )
 
+        client = sbx_protocol.SBXClient(protocol)
+        client.on_message.connect(self._on_message)
+
+        def get_protocol():
+            return protocol
+
+        async with self.__xmpp:
             await self.__loop.create_datagram_endpoint(
-                self._make_control_protocol,
+                get_protocol,
                 local_addr=(
                     dig(self.__config, 'net', 'detect', 'local_address',
                         default="0.0.0.0"),
                     dig(self.__config, 'net', 'detect', 'local_port',
-                        default=0),
+                        default=sbx_protocol.RECEIVER_PORT),
                 ),
             )
 
             while True:
-                try:
-                    await self._detect_and_configure(
-                        ctrl_remote_address,
-                        ctrl_timeout,
-                        local_address,
-                        sntp_server,
-                    )
-                except TimeoutError:
-                    self.logger.info(
-                        "cannot find ESP currently, will re-try in %d seconds",
-                        interval,
-                    )
                 await asyncio.sleep(interval)

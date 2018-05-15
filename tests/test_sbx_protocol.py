@@ -5,8 +5,9 @@ import unittest.mock
 
 from datetime import datetime, timedelta
 
-import sn2daemon.protocol as protocol
-import sn2daemon.sample as sample
+import hintlib.sample as sample
+
+import sn2daemon.sbx_protocol as sbx_protocol
 
 import _sn2d_comm
 
@@ -34,7 +35,7 @@ class TestStatusMessage(unittest.TestCase):
         struct.payload.status.imu.stream_state[1].timestamp = 124
         struct.payload.status.imu.stream_state[1].period = 64
 
-        result = protocol.StatusMessage.from_buf(
+        result = sbx_protocol.StatusMessage.from_buf(
             unittest.mock.sentinel.type_,
             buf[1:]
         )
@@ -46,7 +47,7 @@ class TestStatusMessage(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.StatusMessage,
+            sbx_protocol.StatusMessage,
         )
 
         self.assertEqual(
@@ -99,7 +100,7 @@ class TestStatusMessage(unittest.TestCase):
         struct.payload.status.bme280_metrics[0].configure_status = 20
         struct.payload.status.bme280_metrics[0].timeouts = 0
 
-        result = protocol.StatusMessage.from_buf(
+        result = sbx_protocol.StatusMessage.from_buf(
             unittest.mock.sentinel.type_,
             buf[1:]
         )
@@ -111,7 +112,7 @@ class TestStatusMessage(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.StatusMessage,
+            sbx_protocol.StatusMessage,
         )
 
         self.assertEqual(
@@ -200,7 +201,7 @@ class TestStatusMessage(unittest.TestCase):
         struct.payload.status.bme280_metrics[0].configure_status = 0xff
         struct.payload.status.bme280_metrics[0].timeouts = 20
 
-        result = protocol.StatusMessage.from_buf(
+        result = sbx_protocol.StatusMessage.from_buf(
             unittest.mock.sentinel.type_,
             buf[1:]
         )
@@ -212,7 +213,7 @@ class TestStatusMessage(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.StatusMessage,
+            sbx_protocol.StatusMessage,
         )
 
         self.assertEqual(
@@ -293,7 +294,7 @@ class TestStatusMessage(unittest.TestCase):
         struct.payload.status.bme280_metrics[1].configure_status = 0x34
         struct.payload.status.bme280_metrics[1].timeouts = 1204
 
-        result = protocol.StatusMessage.from_buf(
+        result = sbx_protocol.StatusMessage.from_buf(
             unittest.mock.sentinel.type_,
             buf[1:]
         )
@@ -305,7 +306,7 @@ class TestStatusMessage(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.StatusMessage,
+            sbx_protocol.StatusMessage,
         )
 
         self.assertEqual(
@@ -398,7 +399,7 @@ class TestStatusMessage(unittest.TestCase):
         struct.payload.status.task_metrics[1].cpu_ticks = 20
         struct.payload.status.task_metrics[2].cpu_ticks = 30
 
-        result = protocol.StatusMessage.from_buf(
+        result = sbx_protocol.StatusMessage.from_buf(
             unittest.mock.sentinel.type_,
             buf[1:]
         )
@@ -410,7 +411,7 @@ class TestStatusMessage(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.StatusMessage,
+            sbx_protocol.StatusMessage,
         )
 
         self.assertEqual(
@@ -496,7 +497,7 @@ class TestStatusMessage(unittest.TestCase):
 
 class TestDS18B20Message(unittest.TestCase):
     def setUp(self):
-        self.msg = protocol.DS18B20Message(
+        self.msg = sbx_protocol.DS18B20Message(
             12345,
             [
                 (b"12345678", 12.3),
@@ -525,7 +526,7 @@ class TestDS18B20Message(unittest.TestCase):
         struct.payload.ds18b20.samples[2].id = b"xyz12345"
         struct.payload.ds18b20.samples[2].raw_value = 65372
 
-        result = protocol.DS18B20Message.from_buf(
+        result = sbx_protocol.DS18B20Message.from_buf(
             unittest.mock.sentinel.type_,
             buf[1:]
         )
@@ -537,7 +538,7 @@ class TestDS18B20Message(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.DS18B20Message,
+            sbx_protocol.DS18B20Message,
         )
 
         self.assertEqual(
@@ -575,7 +576,7 @@ class TestDS18B20Message(unittest.TestCase):
         )
 
     def test_init(self):
-        ds18b20_msg = protocol.DS18B20Message(
+        ds18b20_msg = sbx_protocol.DS18B20Message(
             12345,
             [
                 (b"12345678", 12.3),
@@ -586,7 +587,7 @@ class TestDS18B20Message(unittest.TestCase):
 
         self.assertEqual(
             ds18b20_msg.type_,
-            protocol.MsgType.SENSOR_DS18B20,
+            sbx_protocol.MsgType.SENSOR_DS18B20,
         )
 
         self.assertEqual(
@@ -637,7 +638,7 @@ class TestDS18B20Message(unittest.TestCase):
 
 class TestNoiseMessage(unittest.TestCase):
     def setUp(self):
-        self.msg = protocol.NoiseMessage(
+        self.msg = sbx_protocol.NoiseMessage(
             [
                 (1001, 235),
                 (2001, 435),
@@ -660,7 +661,7 @@ class TestNoiseMessage(unittest.TestCase):
             struct.payload.noise.samples[i].timestamp = i*10
             struct.payload.noise.samples[i].value = i*11
 
-        result = protocol.NoiseMessage.from_buf(
+        result = sbx_protocol.NoiseMessage.from_buf(
             unittest.mock.sentinel.type_,
             buf[1:]
         )
@@ -672,7 +673,7 @@ class TestNoiseMessage(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.NoiseMessage,
+            sbx_protocol.NoiseMessage,
         )
 
         self.assertEqual(
@@ -691,7 +692,7 @@ class TestNoiseMessage(unittest.TestCase):
             )
 
     def test_init(self):
-        noise_msg = protocol.NoiseMessage(
+        noise_msg = sbx_protocol.NoiseMessage(
             [
                 (1001, 235),
                 (2001, 435),
@@ -701,7 +702,7 @@ class TestNoiseMessage(unittest.TestCase):
 
         self.assertEqual(
             noise_msg.type_,
-            protocol.MsgType.SENSOR_NOISE,
+            sbx_protocol.MsgType.SENSOR_NOISE,
         )
 
         self.assertEqual(
@@ -747,7 +748,7 @@ class TestNoiseMessage(unittest.TestCase):
 
 class TestLightMessage(unittest.TestCase):
     def setUp(self):
-        self.msg = protocol.LightMessage(
+        self.msg = sbx_protocol.LightMessage(
             [
                 (1000, (1, 2, 3, 4)),
                 (2001, (5, 6, 7, 8)),
@@ -770,7 +771,7 @@ class TestLightMessage(unittest.TestCase):
             for c in range(4):
                 struct.payload.light.samples[i].ch[c] = i*100+c*4
 
-        result = protocol.LightMessage.from_buf(
+        result = sbx_protocol.LightMessage.from_buf(
             unittest.mock.sentinel.type_,
             buf[1:]
         )
@@ -782,7 +783,7 @@ class TestLightMessage(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.LightMessage,
+            sbx_protocol.LightMessage,
         )
 
         self.assertEqual(
@@ -800,7 +801,7 @@ class TestLightMessage(unittest.TestCase):
             )
 
     def test_init(self):
-        light_msg = protocol.LightMessage(
+        light_msg = sbx_protocol.LightMessage(
             [
                 (1000, (1, 2, 3, 4)),
                 (2001, (5, 6, 7, 8)),
@@ -809,7 +810,7 @@ class TestLightMessage(unittest.TestCase):
 
         self.assertEqual(
             light_msg.type_,
-            protocol.MsgType.SENSOR_LIGHT,
+            sbx_protocol.MsgType.SENSOR_LIGHT,
         )
 
         self.assertEqual(
@@ -902,7 +903,7 @@ class TestLightMessage(unittest.TestCase):
 
 class TestBME280Message(unittest.TestCase):
     def setUp(self):
-        self.msg = protocol.BME280Message(
+        self.msg = sbx_protocol.BME280Message(
             1234,
             23.4,
             1234.53,
@@ -952,7 +953,7 @@ class TestBME280Message(unittest.TestCase):
                 unittest.mock.patch("sn2daemon.bme280.compensate_pressure")
             )
 
-            result = protocol.BME280Message.from_buf(
+            result = sbx_protocol.BME280Message.from_buf(
                 unittest.mock.sentinel.type_,
                 buf[1:]
             )
@@ -964,7 +965,7 @@ class TestBME280Message(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.BME280Message,
+            sbx_protocol.BME280Message,
         )
 
         self.assertEqual(
@@ -1019,7 +1020,7 @@ class TestBME280Message(unittest.TestCase):
         )
 
     def test_init(self):
-        bme280_msg = protocol.BME280Message(
+        bme280_msg = sbx_protocol.BME280Message(
             1234,
             23.4,
             1234.53,
@@ -1028,7 +1029,7 @@ class TestBME280Message(unittest.TestCase):
 
         self.assertEqual(
             bme280_msg.type_,
-            protocol.MsgType.SENSOR_BME280,
+            sbx_protocol.MsgType.SENSOR_BME280,
         )
 
         self.assertEqual(
@@ -1108,7 +1109,7 @@ class TestSensorStreamMessage(unittest.TestCase):
                 unittest.mock.patch("sn2daemon.sensor_stream.decompress")
             )
 
-            result = protocol.SensorStreamMessage.from_buf(
+            result = sbx_protocol.SensorStreamMessage.from_buf(
                 unittest.mock.sentinel.type_,
                 buf[1:],
             )
@@ -1125,7 +1126,7 @@ class TestSensorStreamMessage(unittest.TestCase):
 
         self.assertIsInstance(
             result,
-            protocol.SensorStreamMessage,
+            sbx_protocol.SensorStreamMessage,
         )
 
         self.assertEqual(
@@ -1139,15 +1140,15 @@ class TestSensorStreamMessage(unittest.TestCase):
         )
 
     def test_init(self):
-        sm_msg = protocol.SensorStreamMessage(
-            protocol.MsgType.SENSOR_STREAM_COMPASS_Y,
+        sm_msg = sbx_protocol.SensorStreamMessage(
+            sbx_protocol.MsgType.SENSOR_STREAM_COMPASS_Y,
             123,
             [1, 2, 3]
         )
 
         self.assertEqual(
             sm_msg.type_,
-            protocol.MsgType.SENSOR_STREAM_COMPASS_Y,
+            sbx_protocol.MsgType.SENSOR_STREAM_COMPASS_Y,
         )
 
         self.assertEqual(
@@ -1162,22 +1163,22 @@ class TestSensorStreamMessage(unittest.TestCase):
 
     def test_path(self):
         mapping = [
-            (protocol.MsgType.SENSOR_STREAM_ACCEL_X,
+            (sbx_protocol.MsgType.SENSOR_STREAM_ACCEL_X,
              sample.LSM303DSubpart.ACCEL_X),
-            (protocol.MsgType.SENSOR_STREAM_ACCEL_Y,
+            (sbx_protocol.MsgType.SENSOR_STREAM_ACCEL_Y,
              sample.LSM303DSubpart.ACCEL_Y),
-            (protocol.MsgType.SENSOR_STREAM_ACCEL_Z,
+            (sbx_protocol.MsgType.SENSOR_STREAM_ACCEL_Z,
              sample.LSM303DSubpart.ACCEL_Z),
-            (protocol.MsgType.SENSOR_STREAM_COMPASS_X,
+            (sbx_protocol.MsgType.SENSOR_STREAM_COMPASS_X,
              sample.LSM303DSubpart.COMPASS_X),
-            (protocol.MsgType.SENSOR_STREAM_COMPASS_Y,
+            (sbx_protocol.MsgType.SENSOR_STREAM_COMPASS_Y,
              sample.LSM303DSubpart.COMPASS_Y),
-            (protocol.MsgType.SENSOR_STREAM_COMPASS_Z,
+            (sbx_protocol.MsgType.SENSOR_STREAM_COMPASS_Z,
              sample.LSM303DSubpart.COMPASS_Z),
         ]
 
         for type_, subpart in mapping:
-            msg = protocol.SensorStreamMessage(
+            msg = sbx_protocol.SensorStreamMessage(
                 type_,
                 1,
                 []
@@ -1198,14 +1199,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0x82, 0xde, 0xad, 0xbe, 0xef])  # status msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.StatusMessage,
+                sbx_protocol.StatusMessage,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.STATUS,
+            sbx_protocol.MsgType.STATUS,
             data[1:]
         )
 
@@ -1215,14 +1216,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xf1, 0xde, 0xad, 0xbe, 0xef])  # ds18b20 msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.DS18B20Message,
+                sbx_protocol.DS18B20Message,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_DS18B20,
+            sbx_protocol.MsgType.SENSOR_DS18B20,
             data[1:]
         )
 
@@ -1232,14 +1233,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xf2, 0xde, 0xad, 0xbe, 0xef])  # noise msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.NoiseMessage,
+                sbx_protocol.NoiseMessage,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_NOISE,
+            sbx_protocol.MsgType.SENSOR_NOISE,
             data[1:]
         )
 
@@ -1249,14 +1250,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xf4, 0xde, 0xad, 0xbe, 0xef])  # light msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.LightMessage,
+                sbx_protocol.LightMessage,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_LIGHT,
+            sbx_protocol.MsgType.SENSOR_LIGHT,
             data[1:]
         )
 
@@ -1266,14 +1267,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xf5, 0xde, 0xad, 0xbe, 0xef])  # bme280 msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.BME280Message,
+                sbx_protocol.BME280Message,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_BME280,
+            sbx_protocol.MsgType.SENSOR_BME280,
             data[1:]
         )
 
@@ -1283,14 +1284,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xf8, 0xde, 0xad, 0xbe, 0xef])  # accel x msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.SensorStreamMessage,
+                sbx_protocol.SensorStreamMessage,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_STREAM_ACCEL_X,
+            sbx_protocol.MsgType.SENSOR_STREAM_ACCEL_X,
             data[1:]
         )
 
@@ -1300,14 +1301,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xf9, 0xde, 0xad, 0xbe, 0xef])  # accel y msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.SensorStreamMessage,
+                sbx_protocol.SensorStreamMessage,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_STREAM_ACCEL_Y,
+            sbx_protocol.MsgType.SENSOR_STREAM_ACCEL_Y,
             data[1:]
         )
 
@@ -1317,14 +1318,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xfa, 0xde, 0xad, 0xbe, 0xef])  # accel z msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.SensorStreamMessage,
+                sbx_protocol.SensorStreamMessage,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_STREAM_ACCEL_Z,
+            sbx_protocol.MsgType.SENSOR_STREAM_ACCEL_Z,
             data[1:]
         )
 
@@ -1334,14 +1335,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xfb, 0xde, 0xad, 0xbe, 0xef])  # compass x msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.SensorStreamMessage,
+                sbx_protocol.SensorStreamMessage,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_STREAM_COMPASS_X,
+            sbx_protocol.MsgType.SENSOR_STREAM_COMPASS_X,
             data[1:]
         )
 
@@ -1351,14 +1352,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xfc, 0xde, 0xad, 0xbe, 0xef])  # compass y msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.SensorStreamMessage,
+                sbx_protocol.SensorStreamMessage,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_STREAM_COMPASS_Y,
+            sbx_protocol.MsgType.SENSOR_STREAM_COMPASS_Y,
             data[1:]
         )
 
@@ -1368,14 +1369,14 @@ class Testdecode_message(unittest.TestCase):
         data = bytes([0xfd, 0xde, 0xad, 0xbe, 0xef])  # compass z msg type
         with contextlib.ExitStack() as stack:
             from_buf = stack.enter_context(unittest.mock.patch.object(
-                protocol.SensorStreamMessage,
+                sbx_protocol.SensorStreamMessage,
                 "from_buf",
             ))
 
-            result = protocol.decode_message(data)
+            result = sbx_protocol.decode_message(data)
 
         from_buf.assert_called_once_with(
-            protocol.MsgType.SENSOR_STREAM_COMPASS_Z,
+            sbx_protocol.MsgType.SENSOR_STREAM_COMPASS_Z,
             data[1:]
         )
 

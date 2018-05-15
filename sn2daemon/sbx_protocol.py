@@ -19,6 +19,15 @@ from hintlib import sample
 from _sn2d_comm import lib
 
 
+class DataFrameType(Enum):
+    SBX = 0x00
+    ESP_STATUS = 0x01
+
+
+class AppReqType(Enum):
+    SET_NTP_SERVER = 0x01
+
+
 class MsgType(Enum):
     STATUS = lib.STATUS
     SENSOR_DS18B20 = lib.SENSOR_DS18B20
@@ -693,7 +702,7 @@ msgtype_to_cls = {
 }
 
 
-def decode_message(buf):
+def decode_sbx_message(buf):
     try:
         type_ = MsgType(buf[0])
     except ValueError:
@@ -707,169 +716,186 @@ def decode_message(buf):
     return cls.from_buf(type_, buf[1:])
 
 
-class SensorNode2Protocol(asyncio.Protocol):
-    on_message_received = aioxmpp.callbacks.Signal()
-    on_heartbeat = aioxmpp.callbacks.Signal()
-    on_disconnect = aioxmpp.callbacks.Signal()
+class ESPStatusMessage:
+    type_ = None
+    rtc_timestamp = None
+    tx_sent = None
+    tx_dropped = None
+    tx_oom_dropped = None
+    tx_error = None
+    tx_retransmitted = None
+    tx_broadcasts = None
+    tx_queue_overrun = None
+    tx_acklocks_needed = None
 
-    class State(Enum):
-        LENGTH = 0
-        PAYLOAD = 1
+    _v1 = struct.Struct(
+        "<"
+        "L"  # tx_sent
+        "L"  # tx_dropped
+        "L"  # tx_oom_dropped
+        "L"  # tx_error
+        "L"  # tx_retransmitted
+        "L"  # tx_broadcasts
+        "L"  # tx_queue_overrun
+        "L"  # tx_acklocks_needed
+    )
 
-    def __init__(self, logger=None):
-        self.logger = logger or logging.getLogger(
-            ".".join(
-                [__name__, type(self).__qualname__]
-            )
+    def __init__(self,
+                 rtc_timestamp,
+                 tx_sent,
+                 tx_dropped,
+                 tx_oom_dropped,
+                 tx_error,
+                 tx_retransmitted,
+                 tx_broadcasts,
+                 tx_queue_overrun,
+                 tx_acklocks_needed):
+        super().__init__()
+        self.rtc_timestamp = rtc_timestamp
+        self.tx_sent = tx_sent
+        self.tx_dropped = tx_dropped
+        self.tx_oom_dropped = tx_oom_dropped
+        self.tx_error = tx_error
+        self.tx_retransmitted = tx_retransmitted
+        self.tx_broadcasts = tx_broadcasts
+        self.tx_queue_overrun = tx_queue_overrun
+        self.tx_acklocks_needed = tx_acklocks_needed
+
+    @classmethod
+    def from_buf(cls, rtc_timestamp, buf):
+        buf, argv = unpack_and_splice(
+            buf,
+            cls._v1
         )
 
-        self._buffer = bytearray()
-        self._length = None
-        self._state = self.State.LENGTH
-        self.acceptable_sources = set()
-        self._transport = None
+        return cls(rtc_timestamp, *argv)
 
-    def _push(self, buf):
-        self.on_heartbeat()
-        self._buffer.extend(buf)
+    def __repr__(self):
+        return "<{}.{} 0x{:x}>".format(
+            __name__,
+            type(self).__qualname__,
+            id(self),
+        )
 
-    def _force_disconnect(self):
-        if self._transport is not None:
-            self._transport.abort()
-            self._transport.close()
-        self._buffer.clear()
-        self._state = self.State.LENGTH
+    def get_samples(self):
+        for attr in dir(self):
+            if not attr.startswith("tx_"):
+                continue
+            value = getattr(self, attr)
+            if value is None:
+                continue
 
-    def _process(self):
-        if self._state == self.State.LENGTH:
-            if len(self._buffer) < 2:
-                return False
-            self._length = int.from_bytes(self._buffer[:2], "little")
-
-            if not (0 < self._length < 512):
-                self.logger.warning(
-                    "invalid packet length (%d). assuming desync and "
-                    "killing transport.",
-                    self._length,
-                )
-                self._force_disconnect()
-                return False
-
-            del self._buffer[:2]
-            self._state = self.State.PAYLOAD
-            return True
-        elif self._state == self.State.PAYLOAD:
-            if len(self._buffer) < self._length:
-                return False
-
-            pkt = bytes(self._buffer[:self._length])
-            del self._buffer[:self._length]
-            type_ = pkt[0]
-
-            try:
-                obj = decode_message(pkt)
-            except Exception as exc:
-                self.logger.warning("failed to decode message: %r",
-                                    pkt,
-                                    exc_info=True)
-                self._force_disconnect()
-                return False
-
-            if obj is None:
-                self.logger.warning("failed to decode message. type=0x%02x",
-                                    type_)
-                self._force_disconnect()
-                return False
-            else:
-                self.on_message_received(obj)
-
-            self._state = self.State.LENGTH
-            return True
-        else:
-            raise RuntimeError("invalid state")
-
-    def data_received(self, buf):
-        self._push(buf)
-        while self._process():
-            pass
-
-    def connection_made(self, transport):
-        peername = transport.get_extra_info("peername")
-        if peername[0] not in self.acceptable_sources:
-            self.logger.warning(
-                "rejecting inbound connection from %s as it is not a valid "
-                "source address (acceptable are %r)",
-                peername[0],
-                self.acceptable_sources
+            yield sample.Sample(
+                self.rtc_timestamp,
+                sample.SensorPath(
+                    sample.Part.ESP8266_TX,
+                    instance=None,
+                    subpart=sample.ESP8266TXSubpart(
+                        attr[3:].replace("_", "-"),
+                    )
+                ),
+                getattr(self, attr)
             )
-            transport.abort()
-            transport.close()
+
+
+app_req_set_sntp_server_fmt = struct.Struct(
+    "<"
+    "4s"
+)
+
+
+data_frame_header_fmt = struct.Struct(
+   "<"
+   "L"  # rtc timestamp
+   "B"  # type
+)
+
+
+class SBXClient:
+    on_message = aioxmpp.callbacks.Signal()
+
+    def __init__(self, protocol, *, logger=None):
+        super().__init__()
+        self.logger = logger or logging.getLogger(__name__)
+        self._trigger_sync = asyncio.Event()
+        self._protocol = protocol
+        self._protocol.on_resync.connect(
+            self._trigger_sync.set,
+        )
+        self._protocol.on_data_received.connect(self._on_datagram)
+
+        self.ntp_server = None
+
+        self._resync_task = asyncio.ensure_future(self._resync_impl())
+
+    async def _do_resync(self):
+        if self.ntp_server is None:
             return
 
-        # write EOF immediately -- we won’t be sending, ever
+        while True:
+            try:
+                await self._protocol.app_request(
+                    AppReqType.SET_NTP_SERVER.value,
+                    app_req_set_sntp_server_fmt.pack(
+                        self.ntp_server.packed,
+                    ),
+                    max_retries=3,
+                )
+            except TimeoutError:
+                self.logger.warning(
+                    "failed to set NTP server -- re-trying in 10 seconds"
+                )
+            await asyncio.sleep(10)
+
+    async def _resync_impl(self):
+        while True:
+            await self._trigger_sync.wait()
+            self._trigger_sync.clear()
+            await self._do_resync()
+
+    def _on_datagram(self, remainder):
+        remainder, (rtc_timestamp, type_raw) = unpack_and_splice(
+            remainder,
+            data_frame_header_fmt,
+        )
+
+        rtc_timestamp = datetime.utcfromtimestamp(rtc_timestamp)
+
         try:
-            transport.write_eof()
-        except NotImplementedError:
-            pass
+            type_ = DataFrameType(type_raw)
+        except ValueError:
+            self.logger.error("invalid data frame type: %r", type_raw)
+            return
 
-        self._transport = transport
-        self.logger.debug("connected via %r to %s",
-                          self._transport,
-                          peername)
+        print(type_)
 
-    def connection_lost(self, exc):
-        self.logger.warning("lost connection: %s", exc)
-        self.on_disconnect()
+        if type_ == DataFrameType.SBX:
+            try:
+                obj = decode_sbx_message(remainder)
+            except ValueError:
+                self.logger.warning("failed to decode SBX message",
+                                    exc_info=True)
+            else:
+                self.on_message(
+                    rtc_timestamp,
+                    obj,
+                )
+        elif type_ == DataFrameType.ESP_STATUS:
+            try:
+                obj = ESPStatusMessage.from_buf(rtc_timestamp, remainder)
+            except ValueError:
+                self.logger.warning("failed to decode ESP status message %r",
+                                    remainder,
+                                    exc_info=True)
+            else:
+                self.on_message(
+                    rtc_timestamp,
+                    obj,
+                )
+        else:
+            self.logger.debug("no handler for %s data frame",
+                              type_)
 
 
-class SensorNode2Server:
-    on_message_received = aioxmpp.callbacks.Signal()
-
-    def __init__(self, loop):
-        super().__init__()
-        self.loop = loop
-        self._server = None
-        self._clients = []
-        self._last_data_ts = None
-        self.acceptable_sources = set()
-
-    async def start(self, host, port):
-        self._server = await self.loop.create_server(
-            self._make_protocol,
-            host=host,
-            port=port,
-        )
-
-    @property
-    def last_data_ts(self) -> int:
-        return self._last_data_ts
-
-    @property
-    def connected(self) -> bool:
-        return bool(self._clients)
-
-    def _heartbeat(self):
-        self._last_data_ts = time.monotonic()
-
-    def _disconnected(self, protocol):
-        self._clients.remove(protocol)
-        # disconnect from the event
-        return True
-
-    def _make_protocol(self) -> SensorNode2Protocol:
-        protocol = SensorNode2Protocol()
-        protocol.acceptable_sources = self.acceptable_sources
-        protocol.on_heartbeat.connect(
-            self._heartbeat,
-        )
-        protocol.on_message_received.connect(
-            self.on_message_received,
-        )
-        protocol.on_disconnect.connect(
-            functools.partial(
-                self._disconnected,
-                protocol,
-            )
-        )
-        self._clients.append(protocol)
-        return protocol
+SENDER_PORT = 7285
+RECEIVER_PORT = 7284
