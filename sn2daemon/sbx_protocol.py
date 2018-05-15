@@ -870,7 +870,7 @@ class SBXClient:
         if type_ == DataFrameType.SBX:
             try:
                 obj = decode_sbx_message(remainder)
-            except ValueError:
+            except Exception:  # NOQA
                 self.logger.warning("failed to decode SBX message",
                                     exc_info=True)
             else:
@@ -881,7 +881,7 @@ class SBXClient:
         elif type_ == DataFrameType.ESP_STATUS:
             try:
                 obj = ESPStatusMessage.from_buf(rtc_timestamp, remainder)
-            except ValueError:
+            except Exception:
                 self.logger.warning("failed to decode ESP status message %r",
                                     remainder,
                                     exc_info=True)
