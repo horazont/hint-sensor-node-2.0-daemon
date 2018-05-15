@@ -867,8 +867,6 @@ class SBXClient:
             self.logger.error("invalid data frame type: %r", type_raw)
             return
 
-        print(type_)
-
         if type_ == DataFrameType.SBX:
             try:
                 obj = decode_sbx_message(remainder)
