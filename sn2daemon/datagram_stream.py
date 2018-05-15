@@ -517,12 +517,12 @@ class DatagramStreamProtocol(asyncio.DatagramProtocol):
                 self._autohandshake):
             if not connection_id:
                 connection_id = random.getrandbits(32)
-                self.logger.debug(
+                self.logger.info(
                     "uninitialized connection id received, syncing with 0x%08x",
                     connection_id,
                 )
             else:
-                self.logger.debug(
+                self.logger.info(
                     "unknown connection id received, syncing"
                 )
 
