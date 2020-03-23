@@ -36,7 +36,7 @@ def main():
     loop = asyncio.get_event_loop()
     d = sn2daemon.daemon.SensorNode2Daemon(args, config, loop)
 
-    task = asyncio.async(d.run())
+    task = asyncio.ensure_future(d.run())
     loop.add_signal_handler(signal.SIGINT, task.cancel)
     loop.add_signal_handler(signal.SIGTERM, task.cancel)
 
