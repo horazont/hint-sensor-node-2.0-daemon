@@ -1,11 +1,13 @@
 import array
 import asyncio
+import contextlib
 import bz2
 import functools
 import logging
 import math
 import pathlib
 import time
+import typing
 
 from datetime import datetime, timedelta
 
@@ -15,7 +17,7 @@ import hintlib.core
 import hintlib.services
 import hintlib.xso
 
-from . import sbx_protocol, datagram_stream, sensor_stream
+from . import sbx_protocol, datagram_stream, sensor_stream, sink
 from hintlib import utils, rewrite, sample, timeline
 
 
@@ -28,12 +30,23 @@ def dig(mapping, *args, default=None):
     return mapping
 
 
-def rtcify_samples(samples, rtcifier):
+def rtcify_samples(
+        samples: typing.Iterable[sample.RawSample],
+        rtcifier: timeline.RTCifier
+        ) -> typing.Iterable[sample.Sample]:
     for s in samples:
         if isinstance(s.timestamp, datetime):
-            yield s
+            yield sample.Sample(
+                timestamp=s.timestamp,
+                sensor=s.sensor,
+                value=s.value,
+            )
         else:
-            yield s.replace(timestamp=rtcifier.map_to_rtc(s.timestamp))
+            yield sample.Sample(
+                timestamp=rtcifier.map_to_rtc(s.timestamp),
+                sensor=s.sensor,
+                value=s.value,
+            )
 
 
 def deenumify_samples(samples):
@@ -46,7 +59,9 @@ def deenumify_samples(samples):
         )
 
 
-def batch_samples(samples):
+def batch_samples(
+        samples: typing.Iterable[sample.Sample]
+        ) -> typing.Iterable[sample.SampleBatch]:
     curr_batch_ts = None
     curr_batch_bare_path = None
     curr_batch_samples = {}
@@ -55,10 +70,10 @@ def batch_samples(samples):
         if (curr_batch_ts != s.timestamp or
                 curr_batch_bare_path != bare_path):
             if curr_batch_samples:
-                yield (
-                    curr_batch_ts,
-                    curr_batch_bare_path,
-                    curr_batch_samples,
+                yield sample.SampleBatch(
+                    timestamp=curr_batch_ts,
+                    bare_path=curr_batch_bare_path,
+                    samples=curr_batch_samples,
                 )
                 curr_batch_samples = {}
 
@@ -71,11 +86,50 @@ def batch_samples(samples):
         curr_batch_samples[s.sensor.subpart] = s.value
 
     if curr_batch_samples:
-        yield (
-            curr_batch_ts,
-            curr_batch_bare_path,
-            curr_batch_samples,
+        yield sample.SampleBatch(
+            timestamp=curr_batch_ts,
+            bare_path=curr_batch_bare_path,
+            samples=curr_batch_samples,
         )
+
+
+def configure_client(xmpp_cfg, logger) -> hintlib.core.BotCore:
+    core = hintlib.core.BotCore(
+        xmpp_cfg,
+        client_logger=logger,
+    )
+    core.client.summon(aioxmpp.PresenceClient)
+    return core
+
+
+def configure_mc_sink(sink_cfg, core: hintlib.core.BotCore) -> sink.Sink:
+    if not core.sn2d_has_metric_collector:
+        raise ValueError("client for sink has no metric collector destination")
+
+    service = core.client.summon(hintlib.services.BatchSubmitterService)
+    service.queue_size = sink_cfg.get("queue_size", 16)
+    service.module_name = sink_cfg["module_name"]
+
+    return sink.MetricCollectorSink(service)
+
+
+def configure_pubsub_sink(sink_cfg, core: hintlib.core.BotCore) -> sink.Sink:
+    client = core.client.summon(aioxmpp.PubSubClient)
+    return sink.PubSubSink(
+        client,
+        aioxmpp.JID.fromstr(sink_cfg["service"]),
+        queue_size=sink_cfg.get("queue_size", 16),
+    )
+
+
+def configure_sink(sink_cfg, core: hintlib.core.BotCore) -> sink.Sink:
+    protocol = sink_cfg["protocol"]
+    if protocol == "metric-collector":
+        return configure_mc_sink(sink_cfg.get("metric-collector", {}), core)
+    elif protocol == "pubsub":
+        return configure_pubsub_sink(sink_cfg["pubsub"], core)
+    else:
+        raise ValueError("unknown sink protocol: {!r}".format(protocol))
 
 
 class SensorNode2Daemon:
@@ -107,24 +161,40 @@ class SensorNode2Daemon:
 
         self._cputime_prev_data = None
 
-        self.__xmpp = hintlib.core.BotCore(
-            config["xmpp"],
-            client_logger=self.logger.getChild("client")
-        )
-        self.__xmpp.client.summon(aioxmpp.PresenceClient)
-        sender = self.__xmpp.client.summon(hintlib.services.SenderService)
-        sender.peer_jid = aioxmpp.JID.fromstr(config["sink"]["jid"])
+        self.__xmpp_clients = {}
+        stream_client = None
+        for name, cfg in config["xmpp"].items():
+            client = configure_client(
+                cfg,
+                self.logger.getChild("xmpp").getChild(name)
+            )
+            self.__xmpp_clients[name] = client
+
+            if "metric-collector" in cfg:
+                sender = client.client.summon(
+                    hintlib.services.SenderService
+                )
+                sender.peer_jid = aioxmpp.JID.fromstr(cfg["metric-collector"])
+                if stream_client is None:
+                    stream_client = client
+                client.sn2d_has_metric_collector = True
+            else:
+                client.sn2d_has_metric_collector = False
+
+        self._sample_sinks = []
+        for sink_cfg in config["sinks"]:
+            client_name = sink_cfg["via"]
+            client = self.__xmpp_clients[client_name]
+            self._sample_sinks.append(configure_sink(sink_cfg, client))
+
+        if stream_client is None:
+            raise ValueError("no metric-collector client defined")
 
         self._stream_service = \
-            self.__xmpp.client.summon(hintlib.services.StreamSubmitterService)
+            stream_client.client.summon(hintlib.services.StreamSubmitterService)
         self._stream_service.queue_size = \
             config.get("streams", {}).get("queue_length", 16)
         self._stream_service.module_name = config["sensors"]["module_name"]
-        self._sample_service = \
-            self.__xmpp.client.summon(hintlib.services.BatchSubmitterService)
-        self._sample_service.queue_size = \
-            config.get("samples", {}).get("queue_length", 16)
-        self._sample_service.module_name = config["sensors"]["module_name"]
 
         self._timeline = timeline.Timeline(
             2**16,  # wraparound
@@ -184,7 +254,8 @@ class SensorNode2Daemon:
         self._stream_service.submit_block(item)
 
     def _enqueue_sample_batches(self, batches):
-        self._sample_service.enqueue_batches(batches)
+        for sink in self._sample_sinks:
+            sink.submit_batches(batches)
 
     def _print_status(self, rtc_timestamp, obj, now):
         self.logger.debug(
@@ -414,7 +485,6 @@ class SensorNode2Daemon:
 
     async def run(self):
         interval = dig(self.__config, 'net', 'detect', 'interval', default=5)
-        local_address = self.__config['net']['local_address']
         sntp_server = dig(self.__config, 'net', 'config', 'sntp_server',
                           default=None)
         ctrl_remote_address = dig(
@@ -434,7 +504,10 @@ class SensorNode2Daemon:
         def get_protocol():
             return protocol
 
-        async with self.__xmpp:
+        async with contextlib.AsyncExitStack() as stack:
+            for client in self.__xmpp_clients.values():
+                await stack.enter_async_context(client)
+
             await self.__loop.create_datagram_endpoint(
                 get_protocol,
                 local_addr=(
